@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: memu-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: memu
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - memu-network
+
+  memu:
+    build: .
+    container_name: memu-app
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/memu
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./examples:/app/examples
+      - ./tests:/app/tests
+      - memu_data:/app/data
+    networks:
+      - memu-network
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data:
+  memu_data:
+
+networks:
+  memu-network:
+    driver: bridge
