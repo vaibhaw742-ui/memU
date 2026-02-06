@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from memu.app.service import Context
-    from memu.app.settings import PatchConfig
+    from memu.config.settings import PatchConfig
     from memu.database.interfaces import Database
 
 

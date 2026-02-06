@@ -13,6 +13,9 @@ RUN pip install uv
 # Copy project files
 COPY . .
 
+# Remove any local .venv that might have been copied (safe even if it doesn't exist)
+RUN rm -rf .venv
+
 # Install dependencies
 RUN uv venv && \
     . .venv/bin/activate && \

@@ -1,5 +1,4 @@
 #!/bin/bash
-
 echo "🔨 Rebuilding memU application..."
 echo ""
 
@@ -11,7 +10,11 @@ docker-compose stop memu
 echo "Removing old memU container..."
 docker-compose rm -f memu
 
-# Rebuild only the memu service
+# Remove the old image to force a complete rebuild
+echo "Removing old memU image..."
+docker-compose images -q memu | xargs -r docker rmi -f
+
+# Rebuild only the memu service with no cache
 echo "Building new memU image..."
 docker-compose build --no-cache memu
 

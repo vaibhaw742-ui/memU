@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from memu.app.settings import DatabaseConfig
+from memU.src.memu.config.settings import DatabaseConfig
 from memu.database.sqlite.sqlite import SQLiteStore
 
 

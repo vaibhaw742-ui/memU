@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from memu.app.settings import DatabaseConfig
+from memu.config.settings import DatabaseConfig
 from memu.database.inmemory import build_inmemory_database
 from memu.database.interfaces import Database
 

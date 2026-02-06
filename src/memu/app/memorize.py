@@ -12,7 +12,7 @@ from xml.etree.ElementTree import Element
 import defusedxml.ElementTree as ET
 from pydantic import BaseModel
 
-from memu.app.settings import CategoryConfig, CustomPrompt
+from memu.config.settings import CategoryConfig, CustomPrompt
 from memu.database.models import CategoryItem, MemoryCategory, MemoryItem, MemoryType, Resource
 from memu.prompts.category_summary import (
     CUSTOM_PROMPT as CATEGORY_SUMMARY_CUSTOM_PROMPT,
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from memu.app.service import Context
-    from memu.app.settings import MemorizeConfig
+    from memu.config.settings import MemorizeConfig
     from memu.blob.local_fs import LocalFS
     from memu.database.interfaces import Database
 

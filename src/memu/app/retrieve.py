@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from memu.app.service import Context
-    from memu.app.settings import RetrieveConfig
+    from memu.config.settings import RetrieveConfig
     from memu.database.interfaces import Database
 
 

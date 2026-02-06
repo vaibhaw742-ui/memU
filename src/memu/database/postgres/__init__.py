@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from memu.app.settings import DatabaseConfig
+from memu.config.settings import DatabaseConfig
 from memu.database.postgres.postgres import PostgresStore
 from memu.database.postgres.schema import SQLAModels, get_sqlalchemy_models
 

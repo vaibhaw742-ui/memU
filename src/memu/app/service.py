@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from memu.app.crud import CRUDMixin
 from memu.app.memorize import MemorizeMixin
 from memu.app.retrieve import RetrieveMixin
-from memu.app.settings import (
+from memu.config.settings import (
     BlobConfig,
     CategoryConfig,
     DatabaseConfig,

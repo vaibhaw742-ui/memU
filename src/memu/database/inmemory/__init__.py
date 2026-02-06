@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from memu.app.settings import DatabaseConfig
+from memu.config.settings import DatabaseConfig
 from memu.database.inmemory.models import build_inmemory_models
 from memu.database.inmemory.repo import InMemoryStore
 

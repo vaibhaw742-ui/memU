@@ -1,5 +1,5 @@
 from memu.app.service import MemoryService
-from memu.app.settings import (
+from memu.config.settings import (
     BlobConfig,
     DatabaseConfig,
     DefaultUserModel,
