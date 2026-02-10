@@ -28,6 +28,7 @@ dependencies = [
     "pendulum>=3.1.0",
     "langchain-core>=1.2.7",
     "lazyllm>=0.7.3",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [build-system]

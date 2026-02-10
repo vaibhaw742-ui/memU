@@ -248,6 +248,7 @@ class PatchConfig(BaseModel):
 
 class DefaultUserModel(BaseModel):
     user_id: str | None = None
+    workspace_id: str | None = None
     # Agent/session scoping for multi-agent and multi-session memory filtering
     # agent_id: str | None = None
     # session_id: str | None = None

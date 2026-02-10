@@ -1,0 +1,40 @@
+"""
+Jordan Reyes – Machine Learning Engineer Profile
+
+Professional Background:
+
+Machine Learning Engineer at NovaAI Labs (4 years)
+
+MSc in Artificial Intelligence from MIT
+
+Specialization: Computer Vision, Reinforcement Learning, and Model Optimization
+
+Recent Achievements:
+
+Designed a production-grade image recognition system with 98% accuracy
+
+Authored 6 peer-reviewed papers in ICML and CVPR
+
+Recipient of the "Innovator of the Year" award at NovaAI 2024
+
+Skills:
+
+Python, PyTorch, FastAPI
+
+Distributed Training, Model Compression
+
+Experiment Tracking and Pipeline Automation
+
+Interests:
+
+Trail running (marathon-level endurance)
+
+Playing jazz guitar
+
+Mentoring AI enthusiasts through online workshops
+
+
+
+
+
+"""

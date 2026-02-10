@@ -34,7 +34,8 @@ from memu.workflow.interceptor import WorkflowInterceptorHandle, WorkflowInterce
 from memu.workflow.pipeline import PipelineManager
 from memu.workflow.runner import WorkflowRunner, resolve_workflow_runner
 from memu.workflow.step import WorkflowState, WorkflowStep
-
+from memu.utils.category_md_handler import CategoryMarkdownHandler
+from pathlib import Path
 TConfigModel = TypeVar("TConfigModel", bound=BaseModel)
 
 
@@ -57,6 +58,7 @@ class MemoryService(MemorizeMixin, RetrieveMixin, CRUDMixin):
         retrieve_config: RetrieveConfig | dict[str, Any] | None = None,
         workflow_runner: WorkflowRunner | str | None = None,
         user_config: UserConfig | dict[str, Any] | None = None,
+        category_md_output_dir: str | Path | None = None,
     ):
         self.llm_profiles = self._validate_config(llm_profiles, LLMProfilesConfig)
         self.user_config = self._validate_config(user_config, UserConfig)
@@ -78,6 +80,10 @@ class MemoryService(MemorizeMixin, RetrieveMixin, CRUDMixin):
             config=self.database_config,
             user_model=self.user_model,
         )
+
+        # Initialize CategoryMarkdownHandler
+        md_output_dir = category_md_output_dir or "./categories"
+        self.category_md_handler = CategoryMarkdownHandler(output_dir=md_output_dir)
         # We need the concrete user scope (user_id: xxx) to initialize the categories
         # self._start_category_initialization(self._context, self.database)
 

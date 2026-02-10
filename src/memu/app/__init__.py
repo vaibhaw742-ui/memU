@@ -1,4 +1,5 @@
 from memu.app.service import MemoryService
+from memu.app.markdown_workflow_step import create_save_markdown_step_handler
 from memu.config.settings import (
     BlobConfig,
     DatabaseConfig,
@@ -30,4 +31,5 @@ __all__ = [
     "WorkflowRunner",
     "register_workflow_runner",
     "resolve_workflow_runner",
+    "create_save_markdown_step_handler",
 ]

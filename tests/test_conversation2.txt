@@ -1,0 +1,23 @@
+"""
+        Alex Chen - Data Scientist Profile
+        
+        Professional Background:
+        - Senior Data Scientist at TechCorp (3 years)
+        - PhD in Computer Science from Stanford
+        - Specialization: Machine Learning, NLP, Deep Learning
+        
+        Recent Achievements:
+        - Led team that developed state-of-the-art language model
+        - Published 8 papers in top-tier AI conferences
+        - Won Best Paper Award at NeurIPS 2023
+        
+        Skills:
+        - Python, PyTorch, TensorFlow
+        - MLOps, Model Deployment
+        - Research and Development
+        
+        Interests:
+        - Rock climbing (5 years experience)
+        - Chess (competitive player)
+        - Travel and cultural exchange
+        """
