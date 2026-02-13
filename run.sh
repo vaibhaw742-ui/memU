@@ -13,3 +13,4 @@ fi
 echo "🐍 Running: $1"
 echo ""
 docker-compose exec memu .venv/bin/python "$1"
+

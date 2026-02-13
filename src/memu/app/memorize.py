@@ -178,9 +178,52 @@ class MemorizeMixin:
             "user",
         }
 
-    async def _memorize_ingest_resource(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        local_path, raw_text = await self.fs.fetch(state["resource_url"], state["modality"])
-        state.update({"local_path": local_path, "raw_text": raw_text})
+    # async def _memorize_ingest_resource(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+    #     local_path, raw_text = await self.fs.fetch(state["resource_url"], state["modality"])
+    #     state.update({"local_path": local_path, "raw_text": raw_text})
+    #     return state
+    
+    async def _memorize_ingest_resource(
+        state: dict,
+        ctx: dict,
+    ) -> dict:
+        """
+        Step 1: Ingest resource - validate and set modality.
+        
+        Simply validates the resource URL and confirms the modality.
+        No content extraction at this stage.
+        
+        Args:
+            state: Current workflow state with resource_url, modality, user
+            ctx: Step context
+            
+        Returns:
+            Updated state with resource_url and modality confirmed
+        """
+        resource_url = state["resource_url"]
+        modality = state.get("modality", "document")
+        
+        print(f"[Ingest] Resource: {resource_url}")
+        print(f"[Ingest] Modality: {modality}")
+        
+        # Validate modality
+        valid_modalities = [
+            "document", "linkedin", "x", "substack", "medium", 
+            "website", "video", "audio"
+        ]
+        
+        if modality not in valid_modalities:
+            raise ValueError(
+                f"Invalid modality: {modality}. "
+                f"Must be one of: {', '.join(valid_modalities)}"
+            )
+        
+        # Update state (just confirm what we have)
+        state["resource_url"] = resource_url
+        state["modality"] = modality
+        
+        print(f"[Ingest] Validated successfully")
+        
         return state
 
     async def _memorize_preprocess_multimodal(self, state: WorkflowState, step_context: Any) -> WorkflowState:
