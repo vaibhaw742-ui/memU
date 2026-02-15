@@ -27,6 +27,7 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/memu
+      AIRTOP_API_KEY: ${AIRTOP_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

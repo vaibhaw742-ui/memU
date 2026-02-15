@@ -6,7 +6,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
-API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual API key
+API_KEY = "e17970941046bb77.jWGzPtLwZOmPHwTmPT4CVIFqvCecrFW9ADdCSzjw9c"  # Replace with your actual API key
 AGENT_WEBHOOK_URL = "https://api.airtop.ai/api/hooks/agents/8c576110-03ce-4d68-9191-37a4db94686f/webhooks/6319c508-1373-4996-9260-5b023c4f5a4c"
 BASE_URL = "https://api.airtop.ai/api/hooks/agents/8c576110-03ce-4d68-9191-37a4db94686f"
 

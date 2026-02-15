@@ -34,7 +34,6 @@ from memu.prompts.preprocess import PROMPTS as PREPROCESS_PROMPTS
 from memu.utils.conversation import format_conversation_for_preprocess
 from memu.utils.video import VideoFrameExtractor
 from memu.workflow.step import WorkflowState, WorkflowStep
-from memu.utils.category_md_handler import CategoryMarkdownHandler
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,6 @@ class MemorizeMixin:
         category_config_map: dict[str, CategoryConfig]
         _category_prompt_str: str
         fs: LocalFS
-        category_md_handler: CategoryMarkdownHandler 
         _run_workflow: Callable[..., Awaitable[WorkflowState]]
         _get_context: Callable[[], Context]
         _get_database: Callable[[], Database]
@@ -68,7 +66,7 @@ class MemorizeMixin:
         self,
         *,
         resource_url: str,
-        modality: str | None = None,
+        modality: str,
         user: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ctx = self._get_context()
@@ -102,15 +100,15 @@ class MemorizeMixin:
                 step_id="ingest_resource",
                 role="ingest",
                 handler=self._memorize_ingest_resource,
-                requires={"resource_url"},
-                produces={"resource_url", "modality"},
+                requires={"resource_url", "modality"},
+                produces={"local_path", "raw_text"},
                 capabilities={"io"},
             ),
             WorkflowStep(
                 step_id="preprocess_multimodal",
                 role="preprocess",
                 handler=self._memorize_preprocess_multimodal,
-                requires={"resource_url", "modality"},
+                requires={"local_path", "modality", "raw_text"},
                 produces={"preprocessed_resources"},
                 capabilities={"llm"},
                 config={"chat_llm_profile": self.memorize_config.preprocess_llm_profile},
@@ -142,7 +140,7 @@ class MemorizeMixin:
                 step_id="categorize_items",
                 role="categorize",
                 handler=self._memorize_categorize_items,
-                requires={"resource_plans", "ctx", "store", "resource_url", "modality", "user"},
+                requires={"resource_plans", "ctx", "store", "local_path", "modality", "user"},
                 produces={"resources", "items", "relations", "category_updates"},
                 capabilities={"db", "vector"},
                 config={"embed_llm_profile": "embedding"},
@@ -162,15 +160,6 @@ class MemorizeMixin:
                 handler=self._memorize_build_response,
                 requires={"resources", "items", "relations", "ctx", "store", "category_ids"},
                 produces={"response"},
-                capabilities=set(),
-            ),
-            # NEW: Add markdown save step
-            WorkflowStep(
-                step_id="save_categories_markdown",
-                role="save_markdown",
-                handler=self._save_categories_markdown,
-                requires={"category_updates", "ctx", "store"},
-                produces={"markdown_files_saved"},
                 capabilities=set(),
             ),
         ]
@@ -194,455 +183,63 @@ class MemorizeMixin:
     #     state.update({"local_path": local_path, "raw_text": raw_text})
     #     return state
     
-    # async def _memorize_ingest_resource(
-    #     state: dict,
-    #     ctx: dict,
-    # ) -> dict:
-    #     """
-    #     Step 1: Ingest resource - validate and set modality.
-        
-    #     Simply validates the resource URL and confirms the modality.
-    #     No content extraction at this stage.
-        
-    #     Args:
-    #         state: Current workflow state with resource_url, modality, user
-    #         ctx: Step context
-            
-    #     Returns:
-    #         Updated state with resource_url and modality confirmed
-    #     """
-    #     resource_url = state["resource_url"]
-    #     modality = state.get("modality", "document")
-        
-    #     print(f"[Ingest] Resource: {resource_url}")
-    #     print(f"[Ingest] Modality: {modality}")
-        
-    #     # Validate modality
-    #     valid_modalities = [
-    #         "document", "linkedin", "x", "substack", "medium", 
-    #         "website", "video", "audio"
-    #     ]
-        
-    #     if modality not in valid_modalities:
-    #         raise ValueError(
-    #             f"Invalid modality: {modality}. "
-    #             f"Must be one of: {', '.join(valid_modalities)}"
-    #         )
-        
-    #     # Update state (just confirm what we have)
-    #     state["resource_url"] = resource_url
-    #     state["modality"] = modality
-        
-    #     print(f"[Ingest] Validated successfully")
-        
-    #     return state
-
-    async def _memorize_ingest_resource(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+    async def _memorize_ingest_resource(
+        state: dict,
+        ctx: dict,
+    ) -> dict:
         """
-        Step 1: Ingest resource - auto-detect modality from URL.
+        Step 1: Ingest resource - validate and set modality.
         
-        Automatically categorizes the resource URL to determine its type
-        (linkedin, x, substack, website, video, audio, conversation, document).
+        Simply validates the resource URL and confirms the modality.
+        No content extraction at this stage.
         
         Args:
-            state: Current workflow state with resource_url, user
-            step_context: Step execution context
+            state: Current workflow state with resource_url, modality, user
+            ctx: Step context
             
         Returns:
-            Updated state with resource_url and auto-detected modality
+            Updated state with resource_url and modality confirmed
         """
         resource_url = state["resource_url"]
+        modality = state.get("modality", "document")
         
-        logger.info(f"[Ingest] Resource: {resource_url}")
+        print(f"[Ingest] Resource: {resource_url}")
+        print(f"[Ingest] Modality: {modality}")
         
-        # Auto-detect modality from URL
-        modality = self._categorize_resource_url(resource_url)
-        logger.info(f"[Ingest] Auto-detected modality: {modality}")
+        # Validate modality
+        valid_modalities = [
+            "document", "linkedin", "x", "substack", "medium", 
+            "website", "video", "audio"
+        ]
         
-        # Update state
+        if modality not in valid_modalities:
+            raise ValueError(
+                f"Invalid modality: {modality}. "
+                f"Must be one of: {', '.join(valid_modalities)}"
+            )
+        
+        # Update state (just confirm what we have)
         state["resource_url"] = resource_url
         state["modality"] = modality
         
-        logger.info(f"[Ingest] Validated successfully - modality: {modality}")
+        print(f"[Ingest] Validated successfully")
         
         return state
 
-    def _categorize_resource_url(self, resource_url: str) -> str:
-        """
-        Categorize a resource URL based on its domain and file extension.
-        
-        Args:
-            resource_url: URL or file path of the resource
-        
-        Returns:
-            modality: "linkedin", "x", "substack", "medium", "website", 
-                    "document", "video", "audio", "conversation"
-        """
-        from urllib.parse import urlparse
-        
-        url_lower = resource_url.lower()
-        
-        # Parse URL
-        try:
-            parsed = urlparse(resource_url)
-            domain = parsed.netloc.lower()
-            path = parsed.path.lower()
-        except Exception:
-            # If parsing fails, treat as file path
-            domain = ""
-            path = resource_url.lower()
-        
-        # Check for social media platforms
-        if 'linkedin.com' in domain:
-            return "linkedin"
-        if 'twitter.com' in domain or 'x.com' in domain or 't.co' in domain:
-            return "x"
-        if 'substack.com' in domain or '.substack.com' in domain:
-            return "substack"
-        if 'medium.com' in domain or domain.endswith('.medium.com'):
-            return "medium"
-        
-        # Check for video platforms
-        if 'youtube.com' in domain or 'youtu.be' in domain:
-            return "video"
-        video_platforms = ['vimeo.com', 'dailymotion.com', 'twitch.tv', 'tiktok.com']
-        if any(platform in domain for platform in video_platforms):
-            return "video"
-        
-        # Check for audio platforms
-        audio_platforms = ['spotify.com', 'soundcloud.com', 'anchor.fm', 'podcasts.apple.com']
-        if any(platform in domain for platform in audio_platforms):
-            return "audio"
-        
-        # Check file extensions
-        doc_extensions = ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf', '.odt']
-        if any(path.endswith(ext) for ext in doc_extensions):
-            return "document"
-        
-        video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm']
-        if any(path.endswith(ext) for ext in video_extensions):
-            return "video"
-        
-        audio_extensions = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma']
-        if any(path.endswith(ext) for ext in audio_extensions):
-            return "audio"
-        
-        # Check for conversation JSON files
-        if path.endswith('.json'):
-            return "conversation"
-        
-        # If it has a domain but doesn't match specific platforms, it's a website
-        if domain and domain not in ['', 'localhost', '127.0.0.1']:
-            return "website"
-        
-        # Default to document for local files
-        return "document"
-   
-    # async def _memorize_preprocess_multimodal(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #         llm_client = self._get_step_llm_client(step_context)
-    #         preprocessed = await self._preprocess_resource_url(
-    #             local_path=state["local_path"],
-    #             text=state.get("raw_text"),
-    #             modality=state["modality"],
-    #             llm_client=llm_client,
-    #         )
-    #         if not preprocessed:
-    #             preprocessed = [{"text": state.get("raw_text"), "caption": None}]
-    #         state["preprocessed_resources"] = preprocessed
-    #         return state
-
-
     async def _memorize_preprocess_multimodal(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        """
-        Step 2: Preprocess resource based on modality.
-        
-        Routes to appropriate processor (Airtop for web, video/audio processors, etc.)
-        
-        Args:
-            state: Workflow state with resource_url, modality
-            step_context: Step execution context
-            
-        Returns:
-            Updated state with preprocessed_resources containing text_md
-        """
-        resource_url = state["resource_url"]
-        modality = state["modality"]
         llm_client = self._get_step_llm_client(step_context)
-        
-        logger.info(f"[Preprocess] Resource: {resource_url}")
-        logger.info(f"[Preprocess] Modality: {modality}")
-        
-        try:
-            # Route to appropriate processor
-            if modality in ['linkedin', 'x', 'substack', 'medium', 'website']:
-                logger.info("Using Airtop for web content extraction")
-                text_md = await self._process_url_with_airtop(resource_url, modality)
-                
-            elif modality == 'video':
-                logger.info("Using video processor")
-                text_md = await self._process_video(resource_url)
-                
-            elif modality == 'audio':
-                logger.info("Using audio processor")
-                text_md = await self._process_audio(resource_url)
-                
-            elif modality == 'conversation':
-                # Use existing conversation preprocessing
-                local_path, text = await self.fs.fetch(resource_url, modality)
-                preprocessed = await self._preprocess_resource_url(
-                    local_path=local_path,
-                    text=text,
-                    modality=modality,
-                    llm_client=llm_client,
-                )
-                state["preprocessed_resources"] = preprocessed or [{"text": text, "caption": None}]
-                return state
-                
-            elif modality == 'document':
-                # Use existing document processing
-                local_path, text = await self.fs.fetch(resource_url, modality)
-                preprocessed = await self._preprocess_resource_url(
-                    local_path=local_path,
-                    text=text,
-                    modality=modality,
-                    llm_client=llm_client,
-                )
-                state["preprocessed_resources"] = preprocessed or [{"text": text, "caption": None}]
-                return state
-                
-            else:
-                raise ValueError(f"Unsupported modality: {modality}")
-            
-            # Validate content
-            if not text_md or len(text_md) < 10:
-                text_md = f"# Content\n\nContent could not be extracted from {resource_url}"
-                logger.warning("Minimal content extracted, using fallback")
-            
-            # Create preprocessed resource
-            preprocessed_resources = [{
-                "text_md": text_md,
-                "text": text_md,  # Use text_md as text too
-                "resource_url": resource_url,
-                "modality": modality,
-                "caption": f"Content from {modality}"
-            }]
-            
-            state["preprocessed_resources"] = preprocessed_resources
-            logger.info(f"[Preprocess] Extracted {len(text_md)} characters")
-            
-            return state
-            
-        except Exception as e:
-            logger.error(f"[Preprocess] Error: {e}")
-            # Create fallback state
-            fallback_text = f"# Error\n\nFailed to process {resource_url}\n\nError: {str(e)}"
-            state["preprocessed_resources"] = [{
-                "text_md": fallback_text,
-                "text": fallback_text,
-                "resource_url": resource_url,
-                "modality": modality,
-                "caption": f"Error processing content"
-            }]
-            return state
-
-    async def _process_url_with_airtop(self, resource_url: str, modality: str) -> str:
-        """
-        Process URL through Airtop agent to extract markdown content.
-        
-        Args:
-            resource_url: The URL to process
-            modality: The type of resource
-        
-        Returns:
-            text_md: Extracted content in markdown format
-        """
-        import os
-        import requests
-        import time
-        import urllib3
-        
-        # Suppress SSL warnings
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
-        # Configuration
-        API_KEY = os.getenv("AIRTOP_API_KEY")
-        if not API_KEY:
-            raise ValueError("AIRTOP_API_KEY environment variable not set")
-        
-        AGENT_WEBHOOK_URL = "https://api.airtop.ai/api/hooks/agents/e0103755-2146-43d3-bd25-5410d00b3654/webhooks/984d5de3-2807-43c8-af8a-f441652a11f4"
-        BASE_URL = "https://api.airtop.ai/api/hooks/agents/e0103755-2146-43d3-bd25-5410d00b3654"
-        
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {API_KEY}'
-        }
-        
-        logger.info(f"[Airtop] Triggering agent for {modality}")
-        logger.info(f"[Airtop] URL: {resource_url}")
-        
-        # Step 1: Trigger the agent
-        response = requests.post(
-            AGENT_WEBHOOK_URL,
-            headers=headers,
-            json={'configVars': {'url': resource_url}},
-            verify=False
+        preprocessed = await self._preprocess_resource_url(
+            local_path=state["local_path"],
+            text=state.get("raw_text"),
+            modality=state["modality"],
+            llm_client=llm_client,
         )
-        
-        if response.status_code != 200:
-            raise Exception(f"Error triggering agent: {response.status_code} - {response.text}")
-        
-        invocation_id = response.json()['invocationId']
-        logger.info(f"[Airtop] Agent triggered! Invocation ID: {invocation_id}")
-        
-        # Step 2: Poll for results
-        logger.info("[Airtop] Polling for results...")
-        result_url = f"{BASE_URL}/invocations/{invocation_id}/result"
-        
-        max_attempts = 180  # 15 minutes max
-        attempt = 0
-        
-        while attempt < max_attempts:
-            attempt += 1
-            
-            result_response = requests.get(
-                result_url,
-                headers={'Authorization': f'Bearer {API_KEY}', 'Accept': 'application/json'},
-                verify=False,
-                timeout=30
-            )
-            
-            if result_response.status_code != 200:
-                raise Exception(f"Error getting result: {result_response.status_code}")
-            
-            result = result_response.json()
-            status = result.get('status', '').lower()
-            
-            if attempt % 10 == 0:
-                logger.info(f"[Airtop] [{attempt}/{max_attempts}] Status: {status}")
-            
-            if status == 'completed':
-                logger.info("[Airtop] ✅ Agent completed successfully!")
-                output = result.get('output', '')
-                text_md = str(output) if output else ''
-                logger.info(f"[Airtop] Extracted {len(text_md)} characters")
-                return text_md
-                
-            elif status == 'failed':
-                error = result.get('error', 'Unknown error')
-                raise Exception(f"Agent failed: {error}")
-                
-            elif status in ['running', 'awaiting session', 'pending']:
-                time.sleep(5)
-            else:
-                time.sleep(5)
-        
-        raise Exception(f"Timeout: Agent did not complete within {max_attempts * 5 / 60} minutes")
-    
-    async def _process_video(self, resource_url: str) -> str:
-        """
-        Process video URL to extract transcript/metadata.
-        
-        Args:
-            resource_url: Video URL
-        
-        Returns:
-            text_md: Video content in markdown format
-        """
-        logger.info(f"[Video] Processing video: {resource_url}")
-        
-        # TODO: Implement video processing with YouTube Transcript API or Whisper
-        text_md = f"""# Video Content
-
-    **Source:** {resource_url}
-    **Type:** Video
-
-    ## Metadata
-    - URL: {resource_url}
-    - Platform: YouTube/Video
-
-    ## Transcript
-    [Video transcript will be extracted using YouTube Transcript API or Whisper]
-
-    **Note:** Video processing integration pending.
-    """
-        
-        logger.info(f"[Video] Generated placeholder content ({len(text_md)} chars)")
-        return text_md
-
-    async def _process_audio(self, resource_url: str) -> str:
-        """
-        Process audio URL to extract transcript/metadata.
-        
-        Args:
-            resource_url: Audio URL
-        
-        Returns:
-            text_md: Audio content in markdown format
-        """
-        logger.info(f"[Audio] Processing audio: {resource_url}")
-        
-        # TODO: Implement audio processing with Whisper API
-        text_md = f"""# Audio Content
-
-    **Source:** {resource_url}
-    **Type:** Audio/Podcast
-
-    ## Metadata
-    - URL: {resource_url}
-    - Platform: Spotify/Podcast
-
-    ## Transcript
-    [Audio transcript will be extracted using Whisper API]
-
-    **Note:** Audio processing integration pending.
-    """
-        
-        logger.info(f"[Audio] Generated placeholder content ({len(text_md)} chars)")
-        return text_md
-    
-    # async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     llm_client = self._get_step_llm_client(step_context)
-    #     preprocessed_resources = state.get("preprocessed_resources", [])
-    #     resource_plans: list[dict[str, Any]] = []
-    #     total_segments = len(preprocessed_resources) or 1
-
-    #     for idx, prep in enumerate(preprocessed_resources):
-    #         res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
-    #         text = prep.get("text")
-    #         caption = prep.get("caption")
-
-    #         structured_entries = await self._generate_structured_entries(
-    #             resource_url=res_url,
-    #             modality=state["modality"],
-    #             memory_types=state["memory_types"],
-    #             text=text,
-    #             categories_prompt_str=state["categories_prompt_str"],
-    #             llm_client=llm_client,
-    #         )
-
-    #         resource_plans.append({
-    #             "resource_url": res_url,
-    #             "text": text,
-    #             "caption": caption,
-    #             "entries": structured_entries,
-    #         })
-
-    #     state["resource_plans"] = resource_plans
-    #     return state
+        if not preprocessed:
+            preprocessed = [{"text": state.get("raw_text"), "caption": None}]
+        state["preprocessed_resources"] = preprocessed
+        return state
 
     async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        """
-        Step 3: Extract memory items using table-based approach.
-        
-        Uses custom prompt to extract structured table representation from text_md.
-        
-        Args:
-            state: Workflow state with preprocessed_resources
-            step_context: Step execution context
-            
-        Returns:
-            Updated state with resource_plans containing structured entries
-        """
         llm_client = self._get_step_llm_client(step_context)
         preprocessed_resources = state.get("preprocessed_resources", [])
         resource_plans: list[dict[str, Any]] = []
@@ -650,229 +247,39 @@ class MemorizeMixin:
 
         for idx, prep in enumerate(preprocessed_resources):
             res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
-            text_md = prep.get("text_md") or prep.get("text", "")
+            text = prep.get("text")
             caption = prep.get("caption")
 
-            # Generate extraction prompt
-            extraction_prompt = self._create_extraction_prompt(
-                text_md=text_md,
-                categories_prompt_str=state["categories_prompt_str"]
+            structured_entries = await self._generate_structured_entries(
+                resource_url=res_url,
+                modality=state["modality"],
+                memory_types=state["memory_types"],
+                text=text,
+                categories_prompt_str=state["categories_prompt_str"],
+                llm_client=llm_client,
             )
-            
-            logger.info(f"[Extract] Extracting from segment {idx + 1}/{total_segments}")
-            
-            # Call LLM to extract structured data
-            llm_response = await llm_client.summarize(extraction_prompt, system_prompt=None)
-            
-            # Parse response into structured entries (tuples)
-            memory_type, entries = self._parse_extraction_response(llm_response)
-            
-            if not memory_type:
-                memory_type = "Knowledge"
-            
-            logger.info(f"[Extract] Memory Type: '{memory_type}', Entries: {len(entries)}")
 
             resource_plans.append({
                 "resource_url": res_url,
-                "text": text_md,
-                "text_md": text_md,
+                "text": text,
                 "caption": caption,
-                "entries": entries,  # List of tuples: [(memory_type, table, categories), ...]
+                "entries": structured_entries,
             })
 
         state["resource_plans"] = resource_plans
         return state
-    
-    def _create_extraction_prompt(self, text_md: str, categories_prompt_str: str) -> str:
-        """
-        Create a prompt for LLM to extract table representation from text_md.
-        
-        Args:
-            text_md: Preprocessed markdown content
-            categories_prompt_str: Available categories as string
-            
-        Returns:
-            Extraction prompt for the LLM
-        """
-        prompt = f"""Analyze the following markdown document and extract it as a structured table.
-
-    MARKDOWN CONTENT:
-    {text_md}
-
-    AVAILABLE CATEGORIES:
-    {categories_prompt_str}
-
-    YOUR TASK:
-    1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
-
-    2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
-    - Each row: "topic | sub_topic | description"
-    - Capture all main knowledge areas from the document
-    - Keep descriptions concise (1-2 sentences per row)
-
-    3. Categorize the entire document based on its overall content into the available categories.
-
-    RESPONSE FORMAT (JSON):
-    {{
-        "memory_type": "2-3 word type",
-        "entries": [
-            {{
-                "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
-                "categories": ["Category1", "Category2"]
-            }}
-        ]
-    }}
-
-    GUIDELINES:
-    - memory_type: Short, descriptive (2-3 words)
-    - entries: Usually contains just ONE entry representing the whole document
-    - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
-    - Capture 3-6 key topics from the document
-    - categories: Assign based on overall document content
-    - Ensure JSON is valid
-
-    Now analyze the document and provide the JSON response:"""
-        
-        return prompt
-
-    def _parse_extraction_response(self, response_text: str) -> tuple[str | None, list[tuple[str, str, list[str]]]]:
-        """
-        Parse the LLM response and extract memory_type and entries as tuples.
-        
-        Args:
-            response_text: Raw LLM response containing JSON
-            
-        Returns:
-            Tuple of (memory_type, entries) where entries is list of (memory_type, table, categories) tuples
-        """
-        import json
-        import re
-        
-        # Try to extract JSON from the response
-        try:
-            # First try direct JSON parse
-            data = json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to find JSON block in the response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group(0))
-                except json.JSONDecodeError:
-                    logger.warning("[Extract] Failed to parse JSON from response")
-                    return None, []
-            else:
-                logger.warning("[Extract] No JSON found in response")
-                return None, []
-        
-        if not isinstance(data, dict):
-            logger.warning("[Extract] Response is not a dict")
-            return None, []
-        
-        memory_type = data.get("memory_type", "knowledge")
-        entries_data = data.get("entries", [])
-        
-        # Parse entries - convert to tuples (memory_type, table, categories)
-        entries = []
-        for entry in entries_data:
-            if not isinstance(entry, dict):
-                continue
-            
-            table = entry.get("table", "").strip()
-            categories = entry.get("categories", [])
-            
-            if table:  # Must have table content
-                # Return as tuple: (memory_type, table, categories)
-                entries.append((memory_type, table, categories))
-        
-        logger.info(f"[Extract] Parsed {len(entries)} entries from response")
-        return memory_type, entries
-
-    def _parse_table_for_display(self, table_string: str) -> list[dict[str, str]]:
-        """
-        Parse the table string into rows for display/debugging.
-        
-        Args:
-            table_string: Table string with format "topic | sub_topic | description"
-            
-        Returns:
-            List of dicts with topic, sub_topic, description keys
-        """
-        rows = []
-        for line in table_string.split('\n'):
-            line = line.strip()
-            if line and '|' in line:
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 3:
-                    rows.append({
-                        'topic': parts[0],
-                        'sub_topic': parts[1],
-                        'description': parts[2]
-                    })
-        return rows
 
     def _memorize_dedupe_merge(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         # Placeholder for future dedup/merge logic
         state["resource_plans"] = state.get("resource_plans", [])
         return state
 
-
-    # async def _memorize_categorize_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     embed_client = self._get_step_embedding_client(step_context)
-    #     ctx = state["ctx"]
-    #     store = state["store"]
-    #     modality = state["modality"]
-    #     local_path = state["local_path"]
-    #     resources: list[Resource] = []
-    #     items: list[MemoryItem] = []
-    #     relations: list[CategoryItem] = []
-    #     category_updates: dict[str, list[tuple[str, str]]] = {}
-    #     user_scope = state.get("user", {})
-
-    #     for plan in state.get("resource_plans", []):
-    #         res = await self._create_resource_with_caption(
-    #             resource_url=plan["resource_url"],
-    #             modality=modality,
-    #             local_path=local_path,
-    #             caption=plan.get("caption"),
-    #             store=store,
-    #             embed_client=embed_client,
-    #             user=user_scope,
-    #         )
-    #         resources.append(res)
-
-    #         entries = plan.get("entries") or []
-    #         if not entries:
-    #             continue
-
-    #         mem_items, rels, cat_updates = await self._persist_memory_items(
-    #             resource_id=res.id,
-    #             structured_entries=entries,
-    #             ctx=ctx,
-    #             store=store,
-    #             embed_client=embed_client,
-    #             user=user_scope,
-    #         )
-    #         items.extend(mem_items)
-    #         relations.extend(rels)
-    #         for cat_id, mems in cat_updates.items():
-    #             category_updates.setdefault(cat_id, []).extend(mems)
-
-    #     state.update({
-    #         "resources": resources,
-    #         "items": items,
-    #         "relations": relations,
-    #         "category_updates": category_updates,
-    #     })
-    #     return state
-
     async def _memorize_categorize_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         embed_client = self._get_step_embedding_client(step_context)
         ctx = state["ctx"]
         store = state["store"]
-        modality = state["modality"]  # Use modality from state
-        #local_path = state.get("local_path") or state["resource_url"]  # Use resource_url as fallback
-        local_path = state["resource_url"]
+        modality = state["modality"]
+        local_path = state["local_path"]
         resources: list[Resource] = []
         items: list[MemoryItem] = []
         relations: list[CategoryItem] = []
@@ -880,13 +287,9 @@ class MemorizeMixin:
         user_scope = state.get("user", {})
 
         for plan in state.get("resource_plans", []):
-            # IMPORTANT: Get modality and resource_url from plan if available
-            plan_modality = plan.get("modality") or modality
-            plan_resource_url = plan.get("resource_url") or state["resource_url"]
-            
             res = await self._create_resource_with_caption(
-                resource_url=plan_resource_url,  # Use plan's resource_url
-                modality=plan_modality,           # Use plan's modality
+                resource_url=plan["resource_url"],
+                modality=modality,
                 local_path=local_path,
                 caption=plan.get("caption"),
                 store=store,
@@ -901,7 +304,7 @@ class MemorizeMixin:
 
             mem_items, rels, cat_updates = await self._persist_memory_items(
                 resource_id=res.id,
-                structured_entries=entries,  # Now expects tuples: (memory_type, table, categories)
+                structured_entries=entries,
                 ctx=ctx,
                 store=store,
                 embed_client=embed_client,
@@ -919,7 +322,6 @@ class MemorizeMixin:
             "category_updates": category_updates,
         })
         return state
-
 
     async def _memorize_persist_and_index(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         llm_client = self._get_step_llm_client(step_context)
@@ -963,65 +365,6 @@ class MemorizeMixin:
                 "relations": relations,
             }
         state["response"] = response
-        return state
-
-    def _save_categories_markdown(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        """
-        Step 8: Save updated categories to markdown files.
-        
-        This step runs after category summaries are updated and saves
-        the updated categories to local .md files.
-        
-        Args:
-            state: Current workflow state
-            step_context: Step execution context
-            
-        Returns:
-            Updated workflow state with markdown_files_saved count
-        """
-        store = state.get("store")
-        if not store:
-            logger.warning("[Markdown] No store in state, skipping markdown save")
-            return state
-        
-        # Get category updates from state
-        category_updates = state.get("category_updates", {})
-        if not category_updates:
-            logger.debug("[Markdown] No category updates to save")
-            state["markdown_files_saved"] = 0
-            return state
-        
-        # Get updated category IDs
-        updated_category_ids = list(category_updates.keys())
-        
-        # Save each updated category to markdown
-        saved_count = 0
-        saved_paths = []
-        
-        # Access the markdown handler from the service
-        # Note: You need to ensure the handler is accessible
-        if not hasattr(self, 'category_md_handler'):
-            logger.warning("[Markdown] No category_md_handler found, skipping save")
-            state["markdown_files_saved"] = 0
-            return state
-        
-        for cat_id in updated_category_ids:
-            category = store.memory_category_repo.categories.get(cat_id)
-            if category:
-                try:
-                    filepath = self.category_md_handler.save_category(category)
-                    saved_paths.append(str(filepath))
-                    logger.info(f"[Markdown] Saved category '{category.name}' to {filepath}")
-                    saved_count += 1
-                except Exception as e:
-                    logger.error(f"[Markdown] Failed to save category {cat_id}: {e}")
-        
-        logger.info(f"[Markdown] Saved {saved_count} category markdown files")
-        
-        # Add saved info to state
-        state["markdown_files_saved"] = saved_count
-        state["markdown_file_paths"] = saved_paths
-        
         return state
 
     def _segment_resource_url(self, base_url: str, idx: int, total_segments: int) -> str:
@@ -1274,113 +617,52 @@ class MemorizeMixin:
         fallback = f"Resource {resource_url} ({modality}) stored. No structured memories generated."
         return memory_type, fallback, []
 
-    # async def _persist_memory_items(
-    #     self,
-    #     *,
-    #     resource_id: str,
-    #     structured_entries: list[tuple[MemoryType, str, list[str]]],
-    #     ctx: Context,
-    #     store: Database,
-    #     embed_client: Any | None = None,
-    #     user: Mapping[str, Any] | None = None,
-    # ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
-    #     """
-    #     Persist memory items and track category updates.
-
-    #     Returns:
-    #         Tuple of (items, relations, category_updates)
-    #         where category_updates maps category_id -> list of (item_id, summary) tuples
-    #     """
-    #     summary_payloads = [content for _, content, _ in structured_entries]
-    #     client = embed_client or self._get_llm_client()
-    #     item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
-    #     items: list[MemoryItem] = []
-    #     rels: list[CategoryItem] = []
-    #     # Changed: now stores (item_id, summary) tuples for reference support
-    #     category_memory_updates: dict[str, list[tuple[str, str]]] = {}
-
-    #     reinforce = self.memorize_config.enable_item_reinforcement
-    #     for (memory_type, summary_text, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
-    #         item = store.memory_item_repo.create_item(
-    #             resource_id=resource_id,
-    #             memory_type=memory_type,
-    #             summary=summary_text,
-    #             embedding=emb,
-    #             user_data=dict(user or {}),
-    #             reinforce=reinforce,
-    #         )
-    #         items.append(item)
-    #         if reinforce and item.extra.get("reinforcement_count", 1) > 1:
-    #             # existing item
-    #             continue
-    #         mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
-    #         for cid in mapped_cat_ids:
-    #             rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
-    #             # Store (item_id, summary) tuple for reference support
-    #             category_memory_updates.setdefault(cid, []).append((item.id, summary_text))
-
-    #     return items, rels, category_memory_updates
-
     async def _persist_memory_items(
         self,
         *,
         resource_id: str,
-        structured_entries: list[tuple[str, str, list[str]]],  # Now expects tuples
+        structured_entries: list[tuple[MemoryType, str, list[str]]],
         ctx: Context,
         store: Database,
         embed_client: Any | None = None,
         user: Mapping[str, Any] | None = None,
     ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
         """
-        Persist memory items from structured entries (table format).
-        
-        Args:
-            resource_id: Resource ID
-            structured_entries: List of (memory_type, table_string, categories) tuples
-            ctx: Context
-            store: Database
-            embed_client: Embedding client
-            user: User scope data
-            
+        Persist memory items and track category updates.
+
         Returns:
             Tuple of (items, relations, category_updates)
+            where category_updates maps category_id -> list of (item_id, summary) tuples
         """
-        # Extract summaries from entries (the table strings)
-        summary_payloads = [table for _, table, _ in structured_entries]
-        
+        summary_payloads = [content for _, content, _ in structured_entries]
         client = embed_client or self._get_llm_client()
         item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
         items: list[MemoryItem] = []
         rels: list[CategoryItem] = []
+        # Changed: now stores (item_id, summary) tuples for reference support
         category_memory_updates: dict[str, list[tuple[str, str]]] = {}
 
         reinforce = self.memorize_config.enable_item_reinforcement
-        
-        for (memory_type, table_string, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
-            # Create memory item with the table as the summary
+        for (memory_type, summary_text, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
             item = store.memory_item_repo.create_item(
                 resource_id=resource_id,
                 memory_type=memory_type,
-                summary=table_string,  # Store the entire table
+                summary=summary_text,
                 embedding=emb,
                 user_data=dict(user or {}),
                 reinforce=reinforce,
             )
             items.append(item)
-            
             if reinforce and item.extra.get("reinforcement_count", 1) > 1:
                 # existing item
                 continue
-                
             mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
             for cid in mapped_cat_ids:
                 rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
                 # Store (item_id, summary) tuple for reference support
-                category_memory_updates.setdefault(cid, []).append((item.id, table_string))
+                category_memory_updates.setdefault(cid, []).append((item.id, summary_text))
 
-        logger.info(f"[Persist] Created {len(items)} memory items with table format")
         return items, rels, category_memory_updates
-
 
     def _start_category_initialization(self, ctx: Context, store: Database) -> None:
         if ctx.categories_ready:
