@@ -630,6 +630,59 @@ class MemorizeMixin:
     #     state["resource_plans"] = resource_plans
     #     return state
 
+    # async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+    #     """
+    #     Step 3: Extract memory items using table-based approach.
+        
+    #     Uses custom prompt to extract structured table representation from text_md.
+        
+    #     Args:
+    #         state: Workflow state with preprocessed_resources
+    #         step_context: Step execution context
+            
+    #     Returns:
+    #         Updated state with resource_plans containing structured entries
+    #     """
+    #     llm_client = self._get_step_llm_client(step_context)
+    #     preprocessed_resources = state.get("preprocessed_resources", [])
+    #     resource_plans: list[dict[str, Any]] = []
+    #     total_segments = len(preprocessed_resources) or 1
+
+    #     for idx, prep in enumerate(preprocessed_resources):
+    #         res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
+    #         text_md = prep.get("text_md") or prep.get("text", "")
+    #         caption = prep.get("caption")
+
+    #         # Generate extraction prompt
+    #         extraction_prompt = self._create_extraction_prompt(
+    #             text_md=text_md,
+    #             categories_prompt_str=state["categories_prompt_str"]
+    #         )
+            
+    #         logger.info(f"[Extract] Extracting from segment {idx + 1}/{total_segments}")
+            
+    #         # Call LLM to extract structured data
+    #         llm_response = await llm_client.summarize(extraction_prompt, system_prompt=None)
+            
+    #         # Parse response into structured entries (tuples)
+    #         memory_type, entries = self._parse_extraction_response(llm_response)
+            
+    #         if not memory_type:
+    #             memory_type = "Knowledge"
+            
+    #         logger.info(f"[Extract] Memory Type: '{memory_type}', Entries: {len(entries)}")
+
+    #         resource_plans.append({
+    #             "resource_url": res_url,
+    #             "text": text_md,
+    #             "text_md": text_md,
+    #             "caption": caption,
+    #             "entries": entries,  # List of tuples: [(memory_type, table, categories), ...]
+    #         })
+
+    #     state["resource_plans"] = resource_plans
+    #     return state
+    
     async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         """
         Step 3: Extract memory items using table-based approach.
@@ -648,13 +701,48 @@ class MemorizeMixin:
         resource_plans: list[dict[str, Any]] = []
         total_segments = len(preprocessed_resources) or 1
 
+        EXTRACTION_PROMPT_TEMPLATE = """Analyze the following document and extract it as a structured table.
+
+                                        YOUR TASK:
+                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+
+                                        2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
+                                        - Each row: "topic | sub_topic | description"
+                                        - Capture all main knowledge areas from the document
+                                        - Keep descriptions concise (1-2 sentences per row)
+
+                                        3. Categorize the entire document based on its overall content into the available categories.
+
+                                        RESPONSE FORMAT (JSON):
+                                        {{
+                                            "memory_type": "2-3 word type",
+                                            "entries": [
+                                                {{
+                                                    "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+                                                    "categories": ["Category1", "Category2"]
+                                                }}
+                                            ]
+                                        }}
+
+                                        GUIDELINES:
+                                        - memory_type: Short, descriptive (2-3 words)
+                                        - entries: Usually contains just ONE entry representing the whole document
+                                        - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
+                                        - Capture 3-6 key topics from the document
+                                        - categories: Assign based on overall document content
+                                        - Ensure JSON is valid
+
+                                        Now analyze the document and provide the JSON response:"""
+
         for idx, prep in enumerate(preprocessed_resources):
             res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
             text_md = prep.get("text_md") or prep.get("text", "")
             caption = prep.get("caption")
 
-            # Generate extraction prompt
-            extraction_prompt = self._create_extraction_prompt(
+
+            # Generate extraction prompt using the new function
+            extraction_prompt = self._build_extraction_prompt(
+                prompt_template=EXTRACTION_PROMPT_TEMPLATE,
                 text_md=text_md,
                 categories_prompt_str=state["categories_prompt_str"]
             )
@@ -682,58 +770,91 @@ class MemorizeMixin:
 
         state["resource_plans"] = resource_plans
         return state
-    
-    def _create_extraction_prompt(self, text_md: str, categories_prompt_str: str) -> str:
+
+    def _build_extraction_prompt(
+        self,
+        prompt_template: str,
+        text_md: str,
+        categories_prompt_str: str
+    ) -> str:
         """
-        Create a prompt for LLM to extract table representation from text_md.
+        Build the final extraction prompt by automatically adding content and categories.
+        
+        This function constructs a complete prompt by:
+        1. Adding the markdown content section
+        2. Adding the available categories section
+        3. Appending the main prompt template
         
         Args:
+            prompt_template: The base prompt template (task instructions)
             text_md: Preprocessed markdown content
             categories_prompt_str: Available categories as string
             
         Returns:
-            Extraction prompt for the LLM
+            Final extraction prompt ready for LLM
         """
-        prompt = f"""Analyze the following markdown document and extract it as a structured table.
-
-    MARKDOWN CONTENT:
+        # Build the complete prompt with content and categories
+        full_prompt = f"""MARKDOWN CONTENT:
     {text_md}
 
     AVAILABLE CATEGORIES:
     {categories_prompt_str}
 
-    YOUR TASK:
-    1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
-
-    2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
-    - Each row: "topic | sub_topic | description"
-    - Capture all main knowledge areas from the document
-    - Keep descriptions concise (1-2 sentences per row)
-
-    3. Categorize the entire document based on its overall content into the available categories.
-
-    RESPONSE FORMAT (JSON):
-    {{
-        "memory_type": "2-3 word type",
-        "entries": [
-            {{
-                "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
-                "categories": ["Category1", "Category2"]
-            }}
-        ]
-    }}
-
-    GUIDELINES:
-    - memory_type: Short, descriptive (2-3 words)
-    - entries: Usually contains just ONE entry representing the whole document
-    - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
-    - Capture 3-6 key topics from the document
-    - categories: Assign based on overall document content
-    - Ensure JSON is valid
-
-    Now analyze the document and provide the JSON response:"""
+    {prompt_template}"""
         
-        return prompt
+        return full_prompt
+    
+    # def _create_extraction_prompt(self, text_md: str, categories_prompt_str: str) -> str:
+    #     """
+    #     Create a prompt for LLM to extract table representation from text_md.
+        
+    #     Args:
+    #         text_md: Preprocessed markdown content
+    #         categories_prompt_str: Available categories as string
+            
+    #     Returns:
+    #         Extraction prompt for the LLM
+    #     """
+    #     prompt = f"""Analyze the following markdown document and extract it as a structured table.
+
+    # MARKDOWN CONTENT:
+    # {text_md}
+
+    # AVAILABLE CATEGORIES:
+    # {categories_prompt_str}
+
+    # YOUR TASK:
+    # 1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+
+    # 2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
+    # - Each row: "topic | sub_topic | description"
+    # - Capture all main knowledge areas from the document
+    # - Keep descriptions concise (1-2 sentences per row)
+
+    # 3. Categorize the entire document based on its overall content into the available categories.
+
+    # RESPONSE FORMAT (JSON):
+    # {{
+    #     "memory_type": "2-3 word type",
+    #     "entries": [
+    #         {{
+    #             "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+    #             "categories": ["Category1", "Category2"]
+    #         }}
+    #     ]
+    # }}
+
+    # GUIDELINES:
+    # - memory_type: Short, descriptive (2-3 words)
+    # - entries: Usually contains just ONE entry representing the whole document
+    # - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
+    # - Capture 3-6 key topics from the document
+    # - categories: Assign based on overall document content
+    # - Ensure JSON is valid
+
+    # Now analyze the document and provide the JSON response:"""
+        
+    #     return prompt
 
     def _parse_extraction_response(self, response_text: str) -> tuple[str | None, list[tuple[str, str, list[str]]]]:
         """

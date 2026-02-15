@@ -41,6 +41,7 @@ async def main():
         memorize_config=MemorizeConfig(
                                 # Choose which memory types to extract (optional, defaults to all 5)
                                # memory_types=["profile", "events", "knowledge"],
+                               
                                 
                                 # Define your categories (required, or categories won't be used)
                                 memory_categories=[
