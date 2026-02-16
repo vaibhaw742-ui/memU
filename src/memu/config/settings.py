@@ -202,6 +202,44 @@ class RetrieveConfig(BaseModel):
 
 
 class MemorizeConfig(BaseModel):
+    extraction_prompt_template: str | None = Field(
+    default=None,
+    description="Template for extracting structured data. Contains {text_md} and {categories_prompt_str} placeholders."
+)
+    @property
+    def category_prompt_str(self) -> str:
+        """
+        Generate formatted category string for prompts.
+        
+        Returns:
+            Formatted string with each category on a new line:
+            - Category1: Description1
+            - Category2: Description2
+            
+            If no categories, returns "No categories provided."
+        
+        Example:
+            >>> config = MemorizeConfig(
+            ...     memory_categories=[
+            ...         CategoryConfig(name="Tech", description="Technology topics"),
+            ...         CategoryConfig(name="Science", description="Scientific content")
+            ...     ]
+            ... )
+            >>> print(config.category_prompt_str)
+            - Tech: Technology topics
+            - Science: Scientific content
+        """
+        if not self.memory_categories:
+            return "No categories provided."
+        
+        lines = []
+        for cat in self.memory_categories:
+            name = cat.name.strip() or "Untitled"
+            desc = cat.description.strip()
+            lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+        
+        return "\n".join(lines)
+    
     category_assign_threshold: float = Field(default=0.25)
     multimodal_preprocess_prompts: dict[str, str | CustomPrompt] = Field(
         default_factory=dict,

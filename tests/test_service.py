@@ -20,6 +20,41 @@ from memu.app import MemoryService
 from memu.app import create_save_markdown_step_handler
 from memu.workflow.step import WorkflowStep
 
+
+DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
+
+                                        YOUR TASK:
+                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+
+                                        2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
+                                        - Each row: "topic | sub_topic | description"
+                                        - Capture all main knowledge areas from the document
+                                        - Keep descriptions concise (1-2 sentences per row)
+
+                                        3. Categorize the entire document based on its overall content into the available categories.
+
+                                        RESPONSE FORMAT (JSON):
+                                        {{
+                                            "memory_type": "2-3 word type",
+                                            "entries": [
+                                                {{
+                                                    "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+                                                    "categories": ["Category1", "Category2"]
+                                                }}
+                                            ]
+                                        }}
+
+                                        GUIDELINES:
+                                        - memory_type: Short, descriptive (2-3 words)
+                                        - entries: Usually contains just ONE entry representing the whole document
+                                        - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
+                                        - Capture 3-6 key topics from the document
+                                        - categories: Assign based on overall document content
+                                        - Ensure JSON is valid
+
+                                        Now analyze the document and provide the JSON response:"""
+
+
 async def main():
     # Initialize the service
     service = MemoryService(
@@ -41,7 +76,11 @@ async def main():
         memorize_config=MemorizeConfig(
                                 # Choose which memory types to extract (optional, defaults to all 5)
                                # memory_types=["profile", "events", "knowledge"],
-                               
+                               extraction_prompt_template= DEFAULT_EXTRACTION_TEMPLATE,
+                               categories_prompt_str = """ - Agents: Agent-related content
+                                                           - RAG: RAG-related content
+                                                           - LLM Training: Training insights
+                                                           - LLM Inference: Inference techniques""",
                                 
                                 # Define your categories (required, or categories won't be used)
                                 memory_categories=[
@@ -77,7 +116,7 @@ async def main():
 
 
     result = await service.memorize(
-                    resource_url="https://www.linkedin.com/posts/zainhas_inference-ai-llm-activity-7427597857324494849-JxVE?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
+                    resource_url="https://www.linkedin.com/posts/sarthakrastogi_ai-llms-aiagents-activity-7428943700115816448-VC0a?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
                     user={"user_id": "user123", "workspace_id": "workspace-alpha"}
                 )
 

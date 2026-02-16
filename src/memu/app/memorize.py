@@ -50,7 +50,7 @@ class MemorizeMixin:
         memorize_config: MemorizeConfig
         category_configs: list[CategoryConfig]
         category_config_map: dict[str, CategoryConfig]
-        _category_prompt_str: str
+        #_category_prompt_str: str
         fs: LocalFS
         category_md_handler: CategoryMarkdownHandler 
         _run_workflow: Callable[..., Awaitable[WorkflowState]]
@@ -82,7 +82,7 @@ class MemorizeMixin:
             "resource_url": resource_url,
             "modality": modality,
             "memory_types": memory_types,
-            "categories_prompt_str": self._category_prompt_str,
+            "categories_prompt_str": self.memorize_config.category_prompt_str,
             "ctx": ctx,
             "store": store,
             "category_ids": list(ctx.category_ids),
@@ -122,7 +122,7 @@ class MemorizeMixin:
                 requires={
                     "preprocessed_resources",
                     "memory_types",
-                    "categories_prompt_str",
+                   "categories_prompt_str",
                     "modality",
                     "resource_url",
                 },
@@ -701,7 +701,7 @@ class MemorizeMixin:
         resource_plans: list[dict[str, Any]] = []
         total_segments = len(preprocessed_resources) or 1
 
-        EXTRACTION_PROMPT_TEMPLATE = """Analyze the following document and extract it as a structured table.
+        DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
 
                                         YOUR TASK:
                                         1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
@@ -734,6 +734,11 @@ class MemorizeMixin:
 
                                         Now analyze the document and provide the JSON response:"""
 
+        extraction_template = (
+        self.memorize_config.extraction_prompt_template 
+        or DEFAULT_EXTRACTION_TEMPLATE)
+
+
         for idx, prep in enumerate(preprocessed_resources):
             res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
             text_md = prep.get("text_md") or prep.get("text", "")
@@ -742,7 +747,7 @@ class MemorizeMixin:
 
             # Generate extraction prompt using the new function
             extraction_prompt = self._build_extraction_prompt(
-                prompt_template=EXTRACTION_PROMPT_TEMPLATE,
+                prompt_template=extraction_template,
                 text_md=text_md,
                 categories_prompt_str=state["categories_prompt_str"]
             )

@@ -72,7 +72,7 @@ class MemoryService(MemorizeMixin, RetrieveMixin, CRUDMixin):
         self.fs = LocalFS(self.blob_config.resources_dir)
         self.category_configs: list[CategoryConfig] = list(self.memorize_config.memory_categories or [])
         self.category_config_map: dict[str, CategoryConfig] = {cfg.name: cfg for cfg in self.category_configs}
-        self._category_prompt_str = self._format_categories_for_prompt(self.category_configs)
+        #self._category_prompt_str = self._format_categories_for_prompt(self.category_configs)
 
         self._context = Context(categories_ready=not bool(self.category_configs))
 
