@@ -14,23 +14,35 @@ from pydantic import BaseModel
 
 from memu.config.settings import CategoryConfig, CustomPrompt
 from memu.database.models import CategoryItem, MemoryCategory, MemoryItem, MemoryType, Resource
-from memu.prompts.category_summary import (
-    CUSTOM_PROMPT as CATEGORY_SUMMARY_CUSTOM_PROMPT,
-)
-from memu.prompts.category_summary import (
-    PROMPT as CATEGORY_SUMMARY_PROMPT,
-)
-from memu.prompts.memory_type import (
-    CUSTOM_PROMPTS as MEMORY_TYPE_CUSTOM_PROMPTS,
-)
-from memu.prompts.memory_type import (
-    CUSTOM_TYPE_CUSTOM_PROMPTS,
-    DEFAULT_MEMORY_TYPES,
-)
-from memu.prompts.memory_type import (
-    PROMPTS as MEMORY_TYPE_PROMPTS,
+from memu.config.settings import (
+    MemorizeConfig, 
+    CategoryConfig,
+    CustomPrompt,
+    PromptBlock
 )
 from memu.prompts.preprocess import PROMPTS as PREPROCESS_PROMPTS
+from memu.prompts.memory_type import (
+    CUSTOM_TYPE_CUSTOM_PROMPTS,
+    DEFAULT_MEMORY_TYPES,                         ### only this is used in init()
+    CUSTOM_PROMPTS as MEMORY_TYPE_CUSTOM_PROMPTS,  
+    PROMPTS as MEMORY_TYPE_PROMPTS,
+)
+from memu.prompts.category_summary import (
+    CUSTOM_PROMPT as CATEGORY_SUMMARY_CUSTOM_PROMPT,
+    PROMPT as CATEGORY_SUMMARY_PROMPT,
+)
+
+# from memu.prompts.category_summary import (
+#     PROMPT as CATEGORY_SUMMARY_PROMPT,
+# )
+# from memu.prompts.memory_type import (
+#     CUSTOM_PROMPTS as MEMORY_TYPE_CUSTOM_PROMPTS,
+# )
+
+# from memu.prompts.memory_type import (
+#     PROMPTS as MEMORY_TYPE_PROMPTS,
+# )
+
 from memu.utils.conversation import format_conversation_for_preprocess
 from memu.utils.video import VideoFrameExtractor
 from memu.workflow.step import WorkflowState, WorkflowStep
@@ -188,55 +200,8 @@ class MemorizeMixin:
             "category_ids",
             "user",
         }
-
-    # async def _memorize_ingest_resource(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     local_path, raw_text = await self.fs.fetch(state["resource_url"], state["modality"])
-    #     state.update({"local_path": local_path, "raw_text": raw_text})
-    #     return state
     
-    # async def _memorize_ingest_resource(
-    #     state: dict,
-    #     ctx: dict,
-    # ) -> dict:
-    #     """
-    #     Step 1: Ingest resource - validate and set modality.
-        
-    #     Simply validates the resource URL and confirms the modality.
-    #     No content extraction at this stage.
-        
-    #     Args:
-    #         state: Current workflow state with resource_url, modality, user
-    #         ctx: Step context
-            
-    #     Returns:
-    #         Updated state with resource_url and modality confirmed
-    #     """
-    #     resource_url = state["resource_url"]
-    #     modality = state.get("modality", "document")
-        
-    #     print(f"[Ingest] Resource: {resource_url}")
-    #     print(f"[Ingest] Modality: {modality}")
-        
-    #     # Validate modality
-    #     valid_modalities = [
-    #         "document", "linkedin", "x", "substack", "medium", 
-    #         "website", "video", "audio"
-    #     ]
-        
-    #     if modality not in valid_modalities:
-    #         raise ValueError(
-    #             f"Invalid modality: {modality}. "
-    #             f"Must be one of: {', '.join(valid_modalities)}"
-    #         )
-        
-    #     # Update state (just confirm what we have)
-    #     state["resource_url"] = resource_url
-    #     state["modality"] = modality
-        
-    #     print(f"[Ingest] Validated successfully")
-        
-    #     return state
-
+    ## ----------Step 1 --------------
     async def _memorize_ingest_resource(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         """
         Step 1: Ingest resource - auto-detect modality from URL.
@@ -337,21 +302,10 @@ class MemorizeMixin:
         
         # Default to document for local files
         return "document"
-   
-    # async def _memorize_preprocess_multimodal(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #         llm_client = self._get_step_llm_client(step_context)
-    #         preprocessed = await self._preprocess_resource_url(
-    #             local_path=state["local_path"],
-    #             text=state.get("raw_text"),
-    #             modality=state["modality"],
-    #             llm_client=llm_client,
-    #         )
-    #         if not preprocessed:
-    #             preprocessed = [{"text": state.get("raw_text"), "caption": None}]
-    #         state["preprocessed_resources"] = preprocessed
-    #         return state
 
 
+
+    ## ----------Step 2 --------------
     async def _memorize_preprocess_multimodal(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         """
         Step 2: Preprocess resource based on modality.
@@ -600,978 +554,6 @@ class MemorizeMixin:
         logger.info(f"[Audio] Generated placeholder content ({len(text_md)} chars)")
         return text_md
     
-    # async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     llm_client = self._get_step_llm_client(step_context)
-    #     preprocessed_resources = state.get("preprocessed_resources", [])
-    #     resource_plans: list[dict[str, Any]] = []
-    #     total_segments = len(preprocessed_resources) or 1
-
-    #     for idx, prep in enumerate(preprocessed_resources):
-    #         res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
-    #         text = prep.get("text")
-    #         caption = prep.get("caption")
-
-    #         structured_entries = await self._generate_structured_entries(
-    #             resource_url=res_url,
-    #             modality=state["modality"],
-    #             memory_types=state["memory_types"],
-    #             text=text,
-    #             categories_prompt_str=state["categories_prompt_str"],
-    #             llm_client=llm_client,
-    #         )
-
-    #         resource_plans.append({
-    #             "resource_url": res_url,
-    #             "text": text,
-    #             "caption": caption,
-    #             "entries": structured_entries,
-    #         })
-
-    #     state["resource_plans"] = resource_plans
-    #     return state
-
-    # async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     """
-    #     Step 3: Extract memory items using table-based approach.
-        
-    #     Uses custom prompt to extract structured table representation from text_md.
-        
-    #     Args:
-    #         state: Workflow state with preprocessed_resources
-    #         step_context: Step execution context
-            
-    #     Returns:
-    #         Updated state with resource_plans containing structured entries
-    #     """
-    #     llm_client = self._get_step_llm_client(step_context)
-    #     preprocessed_resources = state.get("preprocessed_resources", [])
-    #     resource_plans: list[dict[str, Any]] = []
-    #     total_segments = len(preprocessed_resources) or 1
-
-    #     for idx, prep in enumerate(preprocessed_resources):
-    #         res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
-    #         text_md = prep.get("text_md") or prep.get("text", "")
-    #         caption = prep.get("caption")
-
-    #         # Generate extraction prompt
-    #         extraction_prompt = self._create_extraction_prompt(
-    #             text_md=text_md,
-    #             categories_prompt_str=state["categories_prompt_str"]
-    #         )
-            
-    #         logger.info(f"[Extract] Extracting from segment {idx + 1}/{total_segments}")
-            
-    #         # Call LLM to extract structured data
-    #         llm_response = await llm_client.summarize(extraction_prompt, system_prompt=None)
-            
-    #         # Parse response into structured entries (tuples)
-    #         memory_type, entries = self._parse_extraction_response(llm_response)
-            
-    #         if not memory_type:
-    #             memory_type = "Knowledge"
-            
-    #         logger.info(f"[Extract] Memory Type: '{memory_type}', Entries: {len(entries)}")
-
-    #         resource_plans.append({
-    #             "resource_url": res_url,
-    #             "text": text_md,
-    #             "text_md": text_md,
-    #             "caption": caption,
-    #             "entries": entries,  # List of tuples: [(memory_type, table, categories), ...]
-    #         })
-
-    #     state["resource_plans"] = resource_plans
-    #     return state
-    
-    async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        """
-        Step 3: Extract memory items using table-based approach.
-        
-        Uses custom prompt to extract structured table representation from text_md.
-        
-        Args:
-            state: Workflow state with preprocessed_resources
-            step_context: Step execution context
-            
-        Returns:
-            Updated state with resource_plans containing structured entries
-        """
-        llm_client = self._get_step_llm_client(step_context)
-        preprocessed_resources = state.get("preprocessed_resources", [])
-        resource_plans: list[dict[str, Any]] = []
-        total_segments = len(preprocessed_resources) or 1
-
-        DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
-
-                                        YOUR TASK:
-                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
-
-                                        2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
-                                        - Each row: "topic | sub_topic | description"
-                                        - Capture all main knowledge areas from the document
-                                        - Keep descriptions concise (1-2 sentences per row)
-
-                                        3. Categorize the entire document based on its overall content into the available categories.
-
-                                        RESPONSE FORMAT (JSON):
-                                        {{
-                                            "memory_type": "2-3 word type",
-                                            "entries": [
-                                                {{
-                                                    "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
-                                                    "categories": ["Category1", "Category2"]
-                                                }}
-                                            ]
-                                        }}
-
-                                        GUIDELINES:
-                                        - memory_type: Short, descriptive (2-3 words)
-                                        - entries: Usually contains just ONE entry representing the whole document
-                                        - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
-                                        - Capture 3-6 key topics from the document
-                                        - categories: Assign based on overall document content
-                                        - Ensure JSON is valid
-
-                                        Now analyze the document and provide the JSON response:"""
-
-        extraction_template = (
-        self.memorize_config.extraction_prompt_template 
-        or DEFAULT_EXTRACTION_TEMPLATE)
-
-
-        for idx, prep in enumerate(preprocessed_resources):
-            res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
-            text_md = prep.get("text_md") or prep.get("text", "")
-            caption = prep.get("caption")
-
-
-            # Generate extraction prompt using the new function
-            extraction_prompt = self._build_extraction_prompt(
-                prompt_template=extraction_template,
-                text_md=text_md,
-                categories_prompt_str=state["categories_prompt_str"]
-            )
-            
-            logger.info(f"[Extract] Extracting from segment {idx + 1}/{total_segments}")
-            
-            # Call LLM to extract structured data
-            llm_response = await llm_client.summarize(extraction_prompt, system_prompt=None)
-            
-            # Parse response into structured entries (tuples)
-            memory_type, entries = self._parse_extraction_response(llm_response)
-            
-            if not memory_type:
-                memory_type = "Knowledge"
-            
-            logger.info(f"[Extract] Memory Type: '{memory_type}', Entries: {len(entries)}")
-
-            resource_plans.append({
-                "resource_url": res_url,
-                "text": text_md,
-                "text_md": text_md,
-                "caption": caption,
-                "entries": entries,  # List of tuples: [(memory_type, table, categories), ...]
-            })
-
-        state["resource_plans"] = resource_plans
-        return state
-
-    def _build_extraction_prompt(
-        self,
-        prompt_template: str,
-        text_md: str,
-        categories_prompt_str: str
-    ) -> str:
-        """
-        Build the final extraction prompt by automatically adding content and categories.
-        
-        This function constructs a complete prompt by:
-        1. Adding the markdown content section
-        2. Adding the available categories section
-        3. Appending the main prompt template
-        
-        Args:
-            prompt_template: The base prompt template (task instructions)
-            text_md: Preprocessed markdown content
-            categories_prompt_str: Available categories as string
-            
-        Returns:
-            Final extraction prompt ready for LLM
-        """
-        # Build the complete prompt with content and categories
-        full_prompt = f"""MARKDOWN CONTENT:
-    {text_md}
-
-    AVAILABLE CATEGORIES:
-    {categories_prompt_str}
-
-    {prompt_template}"""
-        
-        return full_prompt
-    
-    # def _create_extraction_prompt(self, text_md: str, categories_prompt_str: str) -> str:
-    #     """
-    #     Create a prompt for LLM to extract table representation from text_md.
-        
-    #     Args:
-    #         text_md: Preprocessed markdown content
-    #         categories_prompt_str: Available categories as string
-            
-    #     Returns:
-    #         Extraction prompt for the LLM
-    #     """
-    #     prompt = f"""Analyze the following markdown document and extract it as a structured table.
-
-    # MARKDOWN CONTENT:
-    # {text_md}
-
-    # AVAILABLE CATEGORIES:
-    # {categories_prompt_str}
-
-    # YOUR TASK:
-    # 1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
-
-    # 2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
-    # - Each row: "topic | sub_topic | description"
-    # - Capture all main knowledge areas from the document
-    # - Keep descriptions concise (1-2 sentences per row)
-
-    # 3. Categorize the entire document based on its overall content into the available categories.
-
-    # RESPONSE FORMAT (JSON):
-    # {{
-    #     "memory_type": "2-3 word type",
-    #     "entries": [
-    #         {{
-    #             "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
-    #             "categories": ["Category1", "Category2"]
-    #         }}
-    #     ]
-    # }}
-
-    # GUIDELINES:
-    # - memory_type: Short, descriptive (2-3 words)
-    # - entries: Usually contains just ONE entry representing the whole document
-    # - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
-    # - Capture 3-6 key topics from the document
-    # - categories: Assign based on overall document content
-    # - Ensure JSON is valid
-
-    # Now analyze the document and provide the JSON response:"""
-        
-    #     return prompt
-
-    def _parse_extraction_response(self, response_text: str) -> tuple[str | None, list[tuple[str, str, list[str]]]]:
-        """
-        Parse the LLM response and extract memory_type and entries as tuples.
-        
-        Args:
-            response_text: Raw LLM response containing JSON
-            
-        Returns:
-            Tuple of (memory_type, entries) where entries is list of (memory_type, table, categories) tuples
-        """
-        import json
-        import re
-        
-        # Try to extract JSON from the response
-        try:
-            # First try direct JSON parse
-            data = json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to find JSON block in the response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group(0))
-                except json.JSONDecodeError:
-                    logger.warning("[Extract] Failed to parse JSON from response")
-                    return None, []
-            else:
-                logger.warning("[Extract] No JSON found in response")
-                return None, []
-        
-        if not isinstance(data, dict):
-            logger.warning("[Extract] Response is not a dict")
-            return None, []
-        
-        memory_type = data.get("memory_type", "knowledge")
-        entries_data = data.get("entries", [])
-        
-        # Parse entries - convert to tuples (memory_type, table, categories)
-        entries = []
-        for entry in entries_data:
-            if not isinstance(entry, dict):
-                continue
-            
-            table = entry.get("table", "").strip()
-            categories = entry.get("categories", [])
-            
-            if table:  # Must have table content
-                # Return as tuple: (memory_type, table, categories)
-                entries.append((memory_type, table, categories))
-        
-        logger.info(f"[Extract] Parsed {len(entries)} entries from response")
-        return memory_type, entries
-
-    def _parse_table_for_display(self, table_string: str) -> list[dict[str, str]]:
-        """
-        Parse the table string into rows for display/debugging.
-        
-        Args:
-            table_string: Table string with format "topic | sub_topic | description"
-            
-        Returns:
-            List of dicts with topic, sub_topic, description keys
-        """
-        rows = []
-        for line in table_string.split('\n'):
-            line = line.strip()
-            if line and '|' in line:
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 3:
-                    rows.append({
-                        'topic': parts[0],
-                        'sub_topic': parts[1],
-                        'description': parts[2]
-                    })
-        return rows
-
-    def _memorize_dedupe_merge(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        # Placeholder for future dedup/merge logic
-        state["resource_plans"] = state.get("resource_plans", [])
-        return state
-
-
-    # async def _memorize_categorize_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-    #     embed_client = self._get_step_embedding_client(step_context)
-    #     ctx = state["ctx"]
-    #     store = state["store"]
-    #     modality = state["modality"]
-    #     local_path = state["local_path"]
-    #     resources: list[Resource] = []
-    #     items: list[MemoryItem] = []
-    #     relations: list[CategoryItem] = []
-    #     category_updates: dict[str, list[tuple[str, str]]] = {}
-    #     user_scope = state.get("user", {})
-
-    #     for plan in state.get("resource_plans", []):
-    #         res = await self._create_resource_with_caption(
-    #             resource_url=plan["resource_url"],
-    #             modality=modality,
-    #             local_path=local_path,
-    #             caption=plan.get("caption"),
-    #             store=store,
-    #             embed_client=embed_client,
-    #             user=user_scope,
-    #         )
-    #         resources.append(res)
-
-    #         entries = plan.get("entries") or []
-    #         if not entries:
-    #             continue
-
-    #         mem_items, rels, cat_updates = await self._persist_memory_items(
-    #             resource_id=res.id,
-    #             structured_entries=entries,
-    #             ctx=ctx,
-    #             store=store,
-    #             embed_client=embed_client,
-    #             user=user_scope,
-    #         )
-    #         items.extend(mem_items)
-    #         relations.extend(rels)
-    #         for cat_id, mems in cat_updates.items():
-    #             category_updates.setdefault(cat_id, []).extend(mems)
-
-    #     state.update({
-    #         "resources": resources,
-    #         "items": items,
-    #         "relations": relations,
-    #         "category_updates": category_updates,
-    #     })
-    #     return state
-
-    async def _memorize_categorize_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        embed_client = self._get_step_embedding_client(step_context)
-        ctx = state["ctx"]
-        store = state["store"]
-        modality = state["modality"]  # Use modality from state
-        #local_path = state.get("local_path") or state["resource_url"]  # Use resource_url as fallback
-        local_path = state["resource_url"]
-        resources: list[Resource] = []
-        items: list[MemoryItem] = []
-        relations: list[CategoryItem] = []
-        category_updates: dict[str, list[tuple[str, str]]] = {}
-        user_scope = state.get("user", {})
-
-        for plan in state.get("resource_plans", []):
-            # IMPORTANT: Get modality and resource_url from plan if available
-            plan_modality = plan.get("modality") or modality
-            plan_resource_url = plan.get("resource_url") or state["resource_url"]
-            
-            res = await self._create_resource_with_caption(
-                resource_url=plan_resource_url,  # Use plan's resource_url
-                modality=plan_modality,           # Use plan's modality
-                local_path=local_path,
-                caption=plan.get("caption"),
-                store=store,
-                embed_client=embed_client,
-                user=user_scope,
-            )
-            resources.append(res)
-
-            entries = plan.get("entries") or []
-            if not entries:
-                continue
-
-            mem_items, rels, cat_updates = await self._persist_memory_items(
-                resource_id=res.id,
-                structured_entries=entries,  # Now expects tuples: (memory_type, table, categories)
-                ctx=ctx,
-                store=store,
-                embed_client=embed_client,
-                user=user_scope,
-            )
-            items.extend(mem_items)
-            relations.extend(rels)
-            for cat_id, mems in cat_updates.items():
-                category_updates.setdefault(cat_id, []).extend(mems)
-
-        state.update({
-            "resources": resources,
-            "items": items,
-            "relations": relations,
-            "category_updates": category_updates,
-        })
-        return state
-
-
-    async def _memorize_persist_and_index(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        llm_client = self._get_step_llm_client(step_context)
-        updated_summaries = await self._update_category_summaries(
-            state.get("category_updates", {}),
-            ctx=state["ctx"],
-            store=state["store"],
-            llm_client=llm_client,
-        )
-        if self.memorize_config.enable_item_references:
-            await self._persist_item_references(
-                updated_summaries=updated_summaries,
-                category_updates=state.get("category_updates", {}),
-                store=state["store"],
-            )
-        return state
-
-    def _memorize_build_response(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        ctx = state["ctx"]
-        store = state["store"]
-        resources = [self._model_dump_without_embeddings(r) for r in state.get("resources", [])]
-        items = [self._model_dump_without_embeddings(item) for item in state.get("items", [])]
-        relations = [rel.model_dump() for rel in state.get("relations", [])]
-        category_ids = state.get("category_ids") or list(ctx.category_ids)
-        categories = [
-            self._model_dump_without_embeddings(store.memory_category_repo.categories[c]) for c in category_ids
-        ]
-
-        if len(resources) == 1:
-            response = {
-                "resource": resources[0],
-                "items": items,
-                "categories": categories,
-                "relations": relations,
-            }
-        else:
-            response = {
-                "resources": resources,
-                "items": items,
-                "categories": categories,
-                "relations": relations,
-            }
-        state["response"] = response
-        return state
-
-    def _save_categories_markdown(self, state: WorkflowState, step_context: Any) -> WorkflowState:
-        """
-        Step 8: Save updated categories to markdown files.
-        
-        This step runs after category summaries are updated and saves
-        the updated categories to local .md files.
-        
-        Args:
-            state: Current workflow state
-            step_context: Step execution context
-            
-        Returns:
-            Updated workflow state with markdown_files_saved count
-        """
-        store = state.get("store")
-        if not store:
-            logger.warning("[Markdown] No store in state, skipping markdown save")
-            return state
-        
-        # Get category updates from state
-        category_updates = state.get("category_updates", {})
-        if not category_updates:
-            logger.debug("[Markdown] No category updates to save")
-            state["markdown_files_saved"] = 0
-            return state
-        
-        # Get updated category IDs
-        updated_category_ids = list(category_updates.keys())
-        
-        # Save each updated category to markdown
-        saved_count = 0
-        saved_paths = []
-        
-        # Access the markdown handler from the service
-        # Note: You need to ensure the handler is accessible
-        if not hasattr(self, 'category_md_handler'):
-            logger.warning("[Markdown] No category_md_handler found, skipping save")
-            state["markdown_files_saved"] = 0
-            return state
-        
-        for cat_id in updated_category_ids:
-            category = store.memory_category_repo.categories.get(cat_id)
-            if category:
-                try:
-                    filepath = self.category_md_handler.save_category(category)
-                    saved_paths.append(str(filepath))
-                    logger.info(f"[Markdown] Saved category '{category.name}' to {filepath}")
-                    saved_count += 1
-                except Exception as e:
-                    logger.error(f"[Markdown] Failed to save category {cat_id}: {e}")
-        
-        logger.info(f"[Markdown] Saved {saved_count} category markdown files")
-        
-        # Add saved info to state
-        state["markdown_files_saved"] = saved_count
-        state["markdown_file_paths"] = saved_paths
-        
-        return state
-
-    def _segment_resource_url(self, base_url: str, idx: int, total_segments: int) -> str:
-        if total_segments <= 1:
-            return base_url
-        path = pathlib.Path(base_url)
-        return f"{path.stem}_#segment_{idx}{path.suffix}"
-
-    async def _fetch_and_preprocess_resource(
-        self, resource_url: str, modality: str, llm_client: Any | None = None
-    ) -> tuple[str, list[dict[str, str | None]]]:
-        """
-        Fetch and preprocess a resource.
-
-        Returns:
-            Tuple of (local_path, preprocessed_resources)
-            where preprocessed_resources is a list of dicts with 'text' and 'caption'
-        """
-        local_path, text = await self.fs.fetch(resource_url, modality)
-        preprocessed_resources = await self._preprocess_resource_url(
-            local_path=local_path,
-            text=text,
-            modality=modality,
-            llm_client=llm_client,
-        )
-        return local_path, preprocessed_resources
-
-    async def _create_resource_with_caption(
-        self,
-        *,
-        resource_url: str,
-        modality: str,
-        local_path: str,
-        caption: str | None,
-        store: Database,
-        embed_client: Any | None = None,
-        user: Mapping[str, Any] | None = None,
-    ) -> Resource:
-        caption_text = caption.strip() if caption else None
-        if caption_text:
-            client = embed_client or self._get_llm_client()
-            caption_embedding = (await client.embed([caption_text]))[0]
-        else:
-            caption_embedding = None
-
-        res = store.resource_repo.create_resource(
-            url=resource_url,
-            modality=modality,
-            local_path=local_path,
-            caption=caption_text,
-            embedding=caption_embedding,
-            user_data=dict(user or {}),
-        )
-        # if caption:
-        #     caption_text = caption.strip()
-        #     if caption_text:
-        #         res.caption = caption_text
-        #         client = embed_client or self._get_llm_client()
-        #         res.embedding = (await client.embed([caption_text]))[0]
-        #         res.updated_at = pendulum.now()
-        return res
-
-    def _resolve_memory_types(self) -> list[MemoryType]:
-        configured_types = self.memorize_config.memory_types or DEFAULT_MEMORY_TYPES
-        return [cast(MemoryType, mtype) for mtype in configured_types]
-
-    def _resolve_summary_prompt(self, modality: str, override: str | None) -> str | None:
-        memo_settings = self.memorize_config
-        result = memo_settings.multimodal_preprocess_prompts.get(modality)
-        if override:
-            return override
-        if result is None:
-            return (
-                memo_settings.default_category_summary_prompt
-                if isinstance(memo_settings.default_category_summary_prompt, str)
-                else None
-            )
-        return result if isinstance(result, str) else None
-
-    def _resolve_multimodal_preprocess_prompt(self, modality: str) -> str | None:
-        memo_settings = self.memorize_config
-        result = memo_settings.multimodal_preprocess_prompts.get(modality)
-        return result if isinstance(result, str) else None
-
-    @staticmethod
-    def _resolve_custom_prompt(prompt: str | CustomPrompt, templates: Mapping[str, str]) -> str:
-        if isinstance(prompt, str):
-            return prompt
-        valid_blocks = [
-            (block.ordinal, name, block.prompt or templates.get(name))
-            for name, block in prompt.items()
-            if (block.ordinal >= 0 and (block.prompt or templates.get(name)))
-        ]
-        if not valid_blocks:
-            # raise ValueError(f"No valid blocks contained in custom prompt: {prompt}")
-            return ""
-        sorted_blocks = sorted(valid_blocks)
-        return "\n\n".join(block for (_, _, block) in sorted_blocks if block is not None)
-
-    async def _generate_structured_entries(
-        self,
-        *,
-        resource_url: str,
-        modality: str,
-        memory_types: list[MemoryType],
-        text: str | None,
-        categories_prompt_str: str,
-        segments: list[dict[str, int | str]] | None = None,
-        llm_client: Any | None = None,
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        if not memory_types:
-            return []
-
-        client = llm_client or self._get_llm_client()
-        if text:
-            entries = await self._generate_text_entries(
-                resource_text=text,
-                modality=modality,
-                memory_types=memory_types,
-                categories_prompt_str=categories_prompt_str,
-                segments=segments,
-                llm_client=client,
-            )
-            return entries
-            # if entries:
-            #     return entries
-            # no_result_entry = self._build_no_result_fallback(memory_types[0], resource_url, modality)
-            # return [no_result_entry]
-
-        return []
-        # return self._build_no_text_fallback(memory_types, resource_url, modality)
-
-    async def _generate_text_entries(
-        self,
-        *,
-        resource_text: str,
-        modality: str,
-        memory_types: list[MemoryType],
-        categories_prompt_str: str,
-        segments: list[dict[str, int | str]] | None,
-        llm_client: Any | None = None,
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        if modality == "conversation" and segments:
-            segment_entries = await self._generate_entries_for_segments(
-                resource_text=resource_text,
-                segments=segments,
-                memory_types=memory_types,
-                categories_prompt_str=categories_prompt_str,
-                llm_client=llm_client,
-            )
-            if segment_entries:
-                return segment_entries
-        return await self._generate_entries_from_text(
-            resource_text=resource_text,
-            memory_types=memory_types,
-            categories_prompt_str=categories_prompt_str,
-            llm_client=llm_client,
-        )
-
-    async def _generate_entries_for_segments(
-        self,
-        *,
-        resource_text: str,
-        segments: list[dict[str, int | str]],
-        memory_types: list[MemoryType],
-        categories_prompt_str: str,
-        llm_client: Any | None = None,
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        entries: list[tuple[MemoryType, str, list[str]]] = []
-        lines = resource_text.split("\n")
-        max_idx = len(lines) - 1
-        for segment in segments:
-            start_idx = int(segment.get("start", 0))
-            end_idx = int(segment.get("end", max_idx))
-            segment_text = self._extract_segment_text(lines, start_idx, end_idx)
-            if not segment_text:
-                continue
-            segment_entries = await self._generate_entries_from_text(
-                resource_text=segment_text,
-                memory_types=memory_types,
-                categories_prompt_str=categories_prompt_str,
-                llm_client=llm_client,
-            )
-            entries.extend(segment_entries)
-        return entries
-
-    async def _generate_entries_from_text(
-        self,
-        *,
-        resource_text: str,
-        memory_types: list[MemoryType],
-        categories_prompt_str: str,
-        llm_client: Any | None = None,
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        if not memory_types:
-            return []
-        client = llm_client or self._get_llm_client()
-        prompts = [
-            self._build_memory_type_prompt(
-                memory_type=mtype,
-                resource_text=resource_text,
-                categories_str=categories_prompt_str,
-            )
-            for mtype in memory_types
-        ]
-        valid_prompts = [prompt for prompt in prompts if prompt.strip()]
-        tasks = [client.summarize(prompt_text) for prompt_text in valid_prompts]
-        responses = await asyncio.gather(*tasks)
-        return self._parse_structured_entries(memory_types, responses)
-
-    def _parse_structured_entries(
-        self, memory_types: list[MemoryType], responses: Sequence[str]
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        entries: list[tuple[MemoryType, str, list[str]]] = []
-        for mtype, response in zip(memory_types, responses, strict=True):
-            parsed = self._parse_memory_type_response_xml(response)
-            # if not parsed:
-            #     fallback_entry = response.strip()
-            #     if fallback_entry:
-            #         entries.append((mtype, fallback_entry, []))
-            #     continue
-            for entry in parsed:
-                content = (entry.get("content") or "").strip()
-                if not content:
-                    continue
-                cat_names = [c.strip() for c in entry.get("categories", []) if isinstance(c, str) and c.strip()]
-                entries.append((mtype, content, cat_names))
-        return entries
-
-    def _extract_segment_text(self, lines: list[str], start_idx: int, end_idx: int) -> str | None:
-        segment_lines = []
-        for line in lines:
-            match = re.match(r"\[(\d+)\]", line)
-            if not match:
-                continue
-            idx = int(match.group(1))
-            if start_idx <= idx <= end_idx:
-                segment_lines.append(line)
-        return "\n".join(segment_lines) if segment_lines else None
-
-    def _build_no_text_fallback(
-        self, memory_types: list[MemoryType], resource_url: str, modality: str
-    ) -> list[tuple[MemoryType, str, list[str]]]:
-        fallback = f"Resource {resource_url} ({modality}) stored. No text summary in v0."
-        return [(mtype, f"{fallback} (memory type: {mtype}).", []) for mtype in memory_types]
-
-    def _build_no_result_fallback(
-        self, memory_type: MemoryType, resource_url: str, modality: str
-    ) -> tuple[MemoryType, str, list[str]]:
-        fallback = f"Resource {resource_url} ({modality}) stored. No structured memories generated."
-        return memory_type, fallback, []
-
-    # async def _persist_memory_items(
-    #     self,
-    #     *,
-    #     resource_id: str,
-    #     structured_entries: list[tuple[MemoryType, str, list[str]]],
-    #     ctx: Context,
-    #     store: Database,
-    #     embed_client: Any | None = None,
-    #     user: Mapping[str, Any] | None = None,
-    # ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
-    #     """
-    #     Persist memory items and track category updates.
-
-    #     Returns:
-    #         Tuple of (items, relations, category_updates)
-    #         where category_updates maps category_id -> list of (item_id, summary) tuples
-    #     """
-    #     summary_payloads = [content for _, content, _ in structured_entries]
-    #     client = embed_client or self._get_llm_client()
-    #     item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
-    #     items: list[MemoryItem] = []
-    #     rels: list[CategoryItem] = []
-    #     # Changed: now stores (item_id, summary) tuples for reference support
-    #     category_memory_updates: dict[str, list[tuple[str, str]]] = {}
-
-    #     reinforce = self.memorize_config.enable_item_reinforcement
-    #     for (memory_type, summary_text, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
-    #         item = store.memory_item_repo.create_item(
-    #             resource_id=resource_id,
-    #             memory_type=memory_type,
-    #             summary=summary_text,
-    #             embedding=emb,
-    #             user_data=dict(user or {}),
-    #             reinforce=reinforce,
-    #         )
-    #         items.append(item)
-    #         if reinforce and item.extra.get("reinforcement_count", 1) > 1:
-    #             # existing item
-    #             continue
-    #         mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
-    #         for cid in mapped_cat_ids:
-    #             rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
-    #             # Store (item_id, summary) tuple for reference support
-    #             category_memory_updates.setdefault(cid, []).append((item.id, summary_text))
-
-    #     return items, rels, category_memory_updates
-
-    async def _persist_memory_items(
-        self,
-        *,
-        resource_id: str,
-        structured_entries: list[tuple[str, str, list[str]]],  # Now expects tuples
-        ctx: Context,
-        store: Database,
-        embed_client: Any | None = None,
-        user: Mapping[str, Any] | None = None,
-    ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
-        """
-        Persist memory items from structured entries (table format).
-        
-        Args:
-            resource_id: Resource ID
-            structured_entries: List of (memory_type, table_string, categories) tuples
-            ctx: Context
-            store: Database
-            embed_client: Embedding client
-            user: User scope data
-            
-        Returns:
-            Tuple of (items, relations, category_updates)
-        """
-        # Extract summaries from entries (the table strings)
-        summary_payloads = [table for _, table, _ in structured_entries]
-        
-        client = embed_client or self._get_llm_client()
-        item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
-        items: list[MemoryItem] = []
-        rels: list[CategoryItem] = []
-        category_memory_updates: dict[str, list[tuple[str, str]]] = {}
-
-        reinforce = self.memorize_config.enable_item_reinforcement
-        
-        for (memory_type, table_string, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
-            # Create memory item with the table as the summary
-            item = store.memory_item_repo.create_item(
-                resource_id=resource_id,
-                memory_type=memory_type,
-                summary=table_string,  # Store the entire table
-                embedding=emb,
-                user_data=dict(user or {}),
-                reinforce=reinforce,
-            )
-            items.append(item)
-            
-            if reinforce and item.extra.get("reinforcement_count", 1) > 1:
-                # existing item
-                continue
-                
-            mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
-            for cid in mapped_cat_ids:
-                rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
-                # Store (item_id, summary) tuple for reference support
-                category_memory_updates.setdefault(cid, []).append((item.id, table_string))
-
-        logger.info(f"[Persist] Created {len(items)} memory items with table format")
-        return items, rels, category_memory_updates
-
-
-    def _start_category_initialization(self, ctx: Context, store: Database) -> None:
-        if ctx.categories_ready:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop:
-            ctx.category_init_task = loop.create_task(self._initialize_categories(ctx, store))
-        else:
-            asyncio.run(self._initialize_categories(ctx, store))
-
-    async def _ensure_categories_ready(
-        self, ctx: Context, store: Database, user_scope: Mapping[str, Any] | None = None
-    ) -> None:
-        if ctx.categories_ready:
-            return
-        if ctx.category_init_task:
-            await ctx.category_init_task
-            ctx.category_init_task = None
-            return
-        await self._initialize_categories(ctx, store, user_scope)
-
-    async def _initialize_categories(
-        self, ctx: Context, store: Database, user: Mapping[str, Any] | None = None
-    ) -> None:
-        if ctx.categories_ready:
-            return
-        if not self.category_configs:
-            ctx.categories_ready = True
-            return
-        cat_texts = [self._category_embedding_text(cfg) for cfg in self.category_configs]
-        cat_vecs = await self._get_llm_client("embedding").embed(cat_texts)
-        ctx.category_ids = []
-        ctx.category_name_to_id = {}
-        for cfg, vec in zip(self.category_configs, cat_vecs, strict=True):
-            name = cfg.name.strip() or "Untitled"
-            description = cfg.description.strip()
-            cat = store.memory_category_repo.get_or_create_category(
-                name=name, description=description, embedding=vec, user_data=dict(user or {})
-            )
-            ctx.category_ids.append(cat.id)
-            ctx.category_name_to_id[name.lower()] = cat.id
-        ctx.categories_ready = True
-
-    @staticmethod
-    def _category_embedding_text(cat: CategoryConfig) -> str:
-        name = cat.name.strip() or "Untitled"
-        desc = cat.description.strip()
-        return f"{name}: {desc}" if desc else name
-
-    def _map_category_names_to_ids(self, names: list[str], ctx: Context) -> list[str]:
-        if not names:
-            return []
-        mapped: list[str] = []
-        seen: set[str] = set()
-        for name in names:
-            key = name.strip().lower()
-            cid = ctx.category_name_to_id.get(key)
-            if cid and cid not in seen:
-                mapped.append(cid)
-                seen.add(cid)
-        return mapped
-
     async def _preprocess_resource_url(
         self, *, local_path: str, text: str | None, modality: str, llm_client: Any | None = None
     ) -> list[dict[str, str | None]]:
@@ -1816,113 +798,537 @@ Summary:"""
         processed_content, caption = self._parse_multimodal_response(processed, "processed_content", "caption")
         return [{"text": processed_content or text, "caption": caption}]
 
-    def _format_categories_for_prompt(self, categories: list[CategoryConfig]) -> str:
-        if not categories:
-            return "No categories provided."
-        lines = []
-        for cat in categories:
-            name = cat.name.strip() or "Untitled"
-            desc = cat.description.strip()
-            lines.append(f"- {name}: {desc}" if desc else f"- {name}")
-        return "\n".join(lines)
-
-    def _add_conversation_indices(self, conversation: str) -> str:
+    def _parse_conversation_preprocess(self, raw: str) -> tuple[str | None, str | None]:
+        conversation = self._extract_tag_content(raw, "conversation")
+        summary = self._extract_tag_content(raw, "summary")
+        return conversation, summary
+ 
+    def _parse_multimodal_response(self, raw: str, content_tag: str, caption_tag: str) -> tuple[str | None, str | None]:
         """
-        Add [INDEX] markers to each line of the conversation.
+        Parse multimodal preprocessing response (video, image, document, audio).
+        Extracts content and caption from XML-like tags.
 
         Args:
-            conversation: Raw conversation text with lines
+            raw: Raw LLM response
+            content_tag: Tag name for main content (e.g., "detailed_description", "processed_content")
+            caption_tag: Tag name for caption (typically "caption")
 
         Returns:
-            Conversation with [INDEX] markers prepended to each non-empty line
+            Tuple of (content, caption)
         """
-        lines = conversation.split("\n")
-        indexed_lines = []
-        index = 0
+        content = self._extract_tag_content(raw, content_tag)
+        caption = self._extract_tag_content(raw, caption_tag)
 
-        for line in lines:
-            stripped = line.strip()
-            if stripped:  # Only index non-empty lines
-                indexed_lines.append(f"[{index}] {line}")
-                index += 1
-            else:
-                # Preserve empty lines without indexing
-                indexed_lines.append(line)
+        # Fallback: if no tags found, try to use raw response as content
+        if not content:
+            content = raw.strip()
 
-        return "\n".join(indexed_lines)
+        # Fallback for caption: use first sentence of content if no caption found
+        if not caption and content:
+            first_sentence = content.split(".")[0]
+            caption = first_sentence if len(first_sentence) <= 200 else first_sentence[:200]
 
-    def _build_memory_type_prompt(self, *, memory_type: MemoryType, resource_text: str, categories_str: str) -> str:
-        configured_prompt = self.memorize_config.memory_type_prompts.get(memory_type)
-        if configured_prompt is None:
-            template = MEMORY_TYPE_PROMPTS.get(memory_type)
-        elif isinstance(configured_prompt, str):
-            template = configured_prompt
-        else:
-            template = self._resolve_custom_prompt(
-                configured_prompt, MEMORY_TYPE_CUSTOM_PROMPTS.get(memory_type, CUSTOM_TYPE_CUSTOM_PROMPTS)
+        return content, caption
+
+    def _parse_conversation_preprocess_with_segments(
+        self, raw: str, original_text: str
+    ) -> tuple[str | None, list[dict[str, int | str]] | None]:
+        """
+        Parse conversation preprocess response and extract segments.
+        Returns: (conversation_text, segments)
+        """
+        conversation = self._extract_tag_content(raw, "conversation")
+        segments = self._extract_segments_with_fallback(raw)
+        return conversation, segments
+    
+    def _extract_segments_with_fallback(self, raw: str) -> list[dict[str, int | str]] | None:
+        segments = self._segments_from_json_payload(raw)
+        if segments is not None:
+            return segments
+        try:
+            blob = self._extract_json_blob(raw)
+        except Exception:
+            logging.exception("Failed to extract segments from conversation preprocess response")
+            return None
+        return self._segments_from_json_payload(blob)
+
+    def _segments_from_json_payload(self, payload: str) -> list[dict[str, int | str]] | None:
+        try:
+            parsed = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return self._segments_from_parsed_data(parsed)
+    
+    @staticmethod
+    def _segments_from_parsed_data(parsed: Any) -> list[dict[str, int | str]] | None:
+        if not isinstance(parsed, dict):
+            return None
+        segments_data = parsed.get("segments")
+        if not isinstance(segments_data, list):
+            return None
+        segments: list[dict[str, int | str]] = []
+        for seg in segments_data:
+            if isinstance(seg, dict) and "start" in seg and "end" in seg:
+                try:
+                    segment: dict[str, int | str] = {
+                        "start": int(seg["start"]),
+                        "end": int(seg["end"]),
+                    }
+                    if "caption" in seg and isinstance(seg["caption"], str):
+                        segment["caption"] = seg["caption"]
+                    segments.append(segment)
+                except (TypeError, ValueError):
+                    continue
+        return segments or None
+
+    @staticmethod
+    def _extract_tag_content(raw: str, tag: str) -> str | None:
+        pattern = re.compile(rf"<{tag}>(.*?)</{tag}>", re.IGNORECASE | re.DOTALL)
+        match = pattern.search(raw)
+        if not match:
+            return None
+        content = match.group(1).strip()
+        return content or None
+
+    
+    ## ----------Step 3 ----------------
+    async def _memorize_extract_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+        """
+        Step 3: Extract memory items using table-based approach.
+        
+        Uses custom prompt to extract structured table representation from text_md.
+        
+        Args:
+            state: Workflow state with preprocessed_resources
+            step_context: Step execution context
+            
+        Returns:
+            Updated state with resource_plans containing structured entries
+        """
+        llm_client = self._get_step_llm_client(step_context)
+        preprocessed_resources = state.get("preprocessed_resources", [])
+        resource_plans: list[dict[str, Any]] = []
+        total_segments = len(preprocessed_resources) or 1
+
+        DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
+
+                                        YOUR TASK:
+                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+
+                                        2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
+                                        - Each row: "topic | sub_topic | description"
+                                        - Capture all main knowledge areas from the document
+                                        - Keep descriptions concise (1-2 sentences per row)
+
+                                        3. Categorize the entire document based on its overall content into the available categories.
+
+                                        RESPONSE FORMAT (JSON):
+                                        {{
+                                            "memory_type": "2-3 word type",
+                                            "entries": [
+                                                {{
+                                                    "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+                                                    "categories": ["Category1", "Category2"]
+                                                }}
+                                            ]
+                                        }}
+
+                                        GUIDELINES:
+                                        - memory_type: Short, descriptive (2-3 words)
+                                        - entries: Usually contains just ONE entry representing the whole document
+                                        - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
+                                        - Capture 3-6 key topics from the document
+                                        - categories: Assign based on overall document content
+                                        - Ensure JSON is valid
+
+                                        Now analyze the document and provide the JSON response:"""
+
+        extraction_template = (
+        self.memorize_config.extraction_prompt_template 
+        or DEFAULT_EXTRACTION_TEMPLATE)
+
+
+        for idx, prep in enumerate(preprocessed_resources):
+            res_url = self._segment_resource_url(state["resource_url"], idx, total_segments)
+            text_md = prep.get("text_md") or prep.get("text", "")
+            caption = prep.get("caption")
+
+
+            # Generate extraction prompt using the new function
+            extraction_prompt = self._build_extraction_prompt(
+                prompt_template=extraction_template,
+                text_md=text_md,
+                categories_prompt_str=state["categories_prompt_str"]
             )
-        if not template:
-            return resource_text
-        safe_resource = self._escape_prompt_value(resource_text)
-        safe_categories = self._escape_prompt_value(categories_str)
-        return template.format(resource=safe_resource, categories_str=safe_categories)
+            
+            logger.info(f"[Extract] Extracting from segment {idx + 1}/{total_segments}")
+            
+            # Call LLM to extract structured data
+            llm_response = await llm_client.summarize(extraction_prompt, system_prompt=None)
+            
+            # Parse response into structured entries (tuples)
+            memory_type, entries = self._parse_extraction_response(llm_response)
+            
+            if not memory_type:
+                memory_type = "Knowledge"
+            
+            logger.info(f"[Extract] Memory Type: '{memory_type}', Entries: {len(entries)}")
 
-    def _build_item_ref_id(self, item_id: str) -> str:
-        return item_id.replace("-", "")[:6]
+            resource_plans.append({
+                "resource_url": res_url,
+                "text": text_md,
+                "text_md": text_md,
+                "caption": caption,
+                "entries": entries,  # List of tuples: [(memory_type, table, categories), ...]
+            })
 
-    def _extract_refs_from_summaries(self, summaries: dict[str, str]) -> set[str]:
+        state["resource_plans"] = resource_plans
+        return state
+    
+    def _segment_resource_url(self, base_url: str, idx: int, total_segments: int) -> str:
+        if total_segments <= 1:
+            return base_url
+        path = pathlib.Path(base_url)
+        return f"{path.stem}_#segment_{idx}{path.suffix}"
+
+    def _build_extraction_prompt(
+        self,
+        prompt_template: str,
+        text_md: str,
+        categories_prompt_str: str
+    ) -> str:
         """
-        Extract all [ref:xxx] references from summary texts.
-
+        Build the final extraction prompt by automatically adding content and categories.
+        
+        This function constructs a complete prompt by:
+        1. Adding the markdown content section
+        2. Adding the available categories section
+        3. Appending the main prompt template
+        
         Args:
-            summaries: dict mapping category_id -> summary text
-
+            prompt_template: The base prompt template (task instructions)
+            text_md: Preprocessed markdown content
+            categories_prompt_str: Available categories as string
+            
         Returns:
-            Set of all referenced short IDs (the xxx part from [ref:xxx])
+            Final extraction prompt ready for LLM
         """
-        from memu.utils.references import extract_references
+        # Build the complete prompt with content and categories
+        full_prompt = f"""MARKDOWN CONTENT:
+    {text_md}
 
-        refs: set[str] = set()
-        for summary in summaries.values():
-            refs.update(extract_references(summary))
-        return refs
+    AVAILABLE CATEGORIES:
+    {categories_prompt_str}
 
-    async def _persist_item_references(
+    {prompt_template}"""
+        
+        return full_prompt
+
+    def _parse_extraction_response(self, response_text: str) -> tuple[str | None, list[tuple[str, str, list[str]]]]:
+        """
+        Parse the LLM response and extract memory_type and entries as tuples.
+        
+        Args:
+            response_text: Raw LLM response containing JSON
+            
+        Returns:
+            Tuple of (memory_type, entries) where entries is list of (memory_type, table, categories) tuples
+        """
+        import json
+        import re
+        
+        # Try to extract JSON from the response
+        try:
+            # First try direct JSON parse
+            data = json.loads(response_text)
+        except json.JSONDecodeError:
+            # Try to find JSON block in the response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(0))
+                except json.JSONDecodeError:
+                    logger.warning("[Extract] Failed to parse JSON from response")
+                    return None, []
+            else:
+                logger.warning("[Extract] No JSON found in response")
+                return None, []
+        
+        if not isinstance(data, dict):
+            logger.warning("[Extract] Response is not a dict")
+            return None, []
+        
+        memory_type = data.get("memory_type", "knowledge")
+        entries_data = data.get("entries", [])
+        
+        # Parse entries - convert to tuples (memory_type, table, categories)
+        entries = []
+        for entry in entries_data:
+            if not isinstance(entry, dict):
+                continue
+            
+            table = entry.get("table", "").strip()
+            categories = entry.get("categories", [])
+            
+            if table:  # Must have table content
+                # Return as tuple: (memory_type, table, categories)
+                entries.append((memory_type, table, categories))
+        
+        logger.info(f"[Extract] Parsed {len(entries)} entries from response")
+        return memory_type, entries
+
+    def _parse_table_for_display(self, table_string: str) -> list[dict[str, str]]:
+        """
+        Parse the table string into rows for display/debugging.
+        
+        Args:
+            table_string: Table string with format "topic | sub_topic | description"
+            
+        Returns:
+            List of dicts with topic, sub_topic, description keys
+        """
+        rows = []
+        for line in table_string.split('\n'):
+            line = line.strip()
+            if line and '|' in line:
+                parts = [p.strip() for p in line.split('|')]
+                if len(parts) >= 3:
+                    rows.append({
+                        'topic': parts[0],
+                        'sub_topic': parts[1],
+                        'description': parts[2]
+                    })
+        return rows
+
+
+    ## ----------Step 4------------------
+    def _memorize_dedupe_merge(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+        # Placeholder for future dedup/merge logic
+        state["resource_plans"] = state.get("resource_plans", [])
+        return state
+
+
+    ## ----------Step 5 ------------------
+    async def _memorize_categorize_items(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+        embed_client = self._get_step_embedding_client(step_context)
+        ctx = state["ctx"]
+        store = state["store"]
+        modality = state["modality"]  # Use modality from state
+        #local_path = state.get("local_path") or state["resource_url"]  # Use resource_url as fallback
+        local_path = state["resource_url"]
+        resources: list[Resource] = []
+        items: list[MemoryItem] = []
+        relations: list[CategoryItem] = []
+        category_updates: dict[str, list[tuple[str, str]]] = {}
+        user_scope = state.get("user", {})
+
+        for plan in state.get("resource_plans", []):
+            # IMPORTANT: Get modality and resource_url from plan if available
+            plan_modality = plan.get("modality") or modality
+            plan_resource_url = plan.get("resource_url") or state["resource_url"]
+            
+            res = await self._create_resource_with_caption(
+                resource_url=plan_resource_url,  # Use plan's resource_url
+                modality=plan_modality,           # Use plan's modality
+                local_path=local_path,
+                caption=plan.get("caption"),
+                store=store,
+                embed_client=embed_client,
+                user=user_scope,
+            )
+            resources.append(res)
+
+            entries = plan.get("entries") or []
+            if not entries:
+                continue
+
+            mem_items, rels, cat_updates = await self._persist_memory_items(
+                resource_id=res.id,
+                structured_entries=entries,  # Now expects tuples: (memory_type, table, categories)
+                ctx=ctx,
+                store=store,
+                embed_client=embed_client,
+                user=user_scope,
+            )
+            items.extend(mem_items)
+            relations.extend(rels)
+            for cat_id, mems in cat_updates.items():
+                category_updates.setdefault(cat_id, []).extend(mems)
+
+        state.update({
+            "resources": resources,
+            "items": items,
+            "relations": relations,
+            "category_updates": category_updates,
+        })
+        return state
+    
+    async def _create_resource_with_caption(
         self,
         *,
-        updated_summaries: dict[str, str],
-        category_updates: dict[str, list[tuple[str, str]]],
+        resource_url: str,
+        modality: str,
+        local_path: str,
+        caption: str | None,
         store: Database,
-    ) -> None:
+        embed_client: Any | None = None,
+        user: Mapping[str, Any] | None = None,
+    ) -> Resource:
+        caption_text = caption.strip() if caption else None
+        if caption_text:
+            client = embed_client or self._get_llm_client()
+            caption_embedding = (await client.embed([caption_text]))[0]
+        else:
+            caption_embedding = None
+
+        res = store.resource_repo.create_resource(
+            url=resource_url,
+            modality=modality,
+            local_path=local_path,
+            caption=caption_text,
+            embedding=caption_embedding,
+            user_data=dict(user or {}),
+        )
+        # if caption:
+        #     caption_text = caption.strip()
+        #     if caption_text:
+        #         res.caption = caption_text
+        #         client = embed_client or self._get_llm_client()
+        #         res.embedding = (await client.embed([caption_text]))[0]
+        #         res.updated_at = pendulum.now()
+        return res
+
+    async def _persist_memory_items(
+        self,
+        *,
+        resource_id: str,
+        structured_entries: list[tuple[str, str, list[str]]],  # Now expects tuples
+        ctx: Context,
+        store: Database,
+        embed_client: Any | None = None,
+        user: Mapping[str, Any] | None = None,
+    ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
         """
-        Persist ref_id to items that are referenced in category summaries.
-
-        This function:
-        1. Extracts all [ref:xxx] patterns from updated summaries
-        2. Builds a mapping of short_id -> full item_id for all items in category_updates
-        3. For items whose short_id appears in the references, updates their extra column
-           with {"ref_id": short_id}
+        Persist memory items from structured entries (table format).
+        
+        Args:
+            resource_id: Resource ID
+            structured_entries: List of (memory_type, table_string, categories) tuples
+            ctx: Context
+            store: Database
+            embed_client: Embedding client
+            user: User scope data
+            
+        Returns:
+            Tuple of (items, relations, category_updates)
         """
-        # Extract all referenced short IDs from summaries
-        referenced_short_ids = self._extract_refs_from_summaries(updated_summaries)
-        if not referenced_short_ids:
-            return
+        # Extract summaries from entries (the table strings)
+        summary_payloads = [table for _, table, _ in structured_entries]
+        
+        client = embed_client or self._get_llm_client()
+        item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
+        items: list[MemoryItem] = []
+        rels: list[CategoryItem] = []
+        category_memory_updates: dict[str, list[tuple[str, str]]] = {}
 
-        # Build mapping of short_id -> full item_id for all items in category_updates
-        short_id_to_item_id: dict[str, str] = {}
-        for item_tuples in category_updates.values():
-            for item_id, _ in item_tuples:
-                short_id = self._build_item_ref_id(item_id)
-                short_id_to_item_id[short_id] = item_id
+        reinforce = self.memorize_config.enable_item_reinforcement
+        
+        for (memory_type, table_string, cat_names), emb in zip(structured_entries, item_embeddings, strict=True):
+            # Create memory item with the table as the summary
+            item = store.memory_item_repo.create_item(
+                resource_id=resource_id,
+                memory_type=memory_type,
+                summary=table_string,  # Store the entire table
+                embedding=emb,
+                user_data=dict(user or {}),
+                reinforce=reinforce,
+            )
+            items.append(item)
+            
+            if reinforce and item.extra.get("reinforcement_count", 1) > 1:
+                # existing item
+                continue
+                
+            mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
+            for cid in mapped_cat_ids:
+                rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
+                # Store (item_id, summary) tuple for reference support
+                category_memory_updates.setdefault(cid, []).append((item.id, table_string))
 
-        # Update extra column for referenced items
-        for short_id in referenced_short_ids:
-            matched_item_id = short_id_to_item_id.get(short_id)
-            if matched_item_id:
-                store.memory_item_repo.update_item(
-                    item_id=matched_item_id,
-                    extra={"ref_id": short_id},
-                )
+        logger.info(f"[Persist] Created {len(items)} memory items with table format")
+        return items, rels, category_memory_updates
+    
+    def _map_category_names_to_ids(self, names: list[str], ctx: Context) -> list[str]:
+        if not names:
+            return []
+        mapped: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            key = name.strip().lower()
+            cid = ctx.category_name_to_id.get(key)
+            if cid and cid not in seen:
+                mapped.append(cid)
+                seen.add(cid)
+        return mapped
+
+    
+    ## ----------Step 6 ------------------
+    async def _memorize_persist_and_index(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+        llm_client = self._get_step_llm_client(step_context)
+        updated_summaries = await self._update_category_summaries(
+            state.get("category_updates", {}),
+            ctx=state["ctx"],
+            store=state["store"],
+            llm_client=llm_client,
+        )
+        if self.memorize_config.enable_item_references:
+            await self._persist_item_references(
+                updated_summaries=updated_summaries,
+                category_updates=state.get("category_updates", {}),
+                store=state["store"],
+            )
+        return state
+    
+    async def _update_category_summaries(
+        self,
+        updates: dict[str, list[tuple[str, str]]] | dict[str, list[str]],
+        ctx: Context,
+        store: Database,
+        llm_client: Any | None = None,
+    ) -> dict[str, str]:
+        """
+        Update category summaries based on new memory items.
+
+        Returns:
+            dict mapping category_id -> updated summary text
+        """
+        updated_summaries: dict[str, str] = {}
+        if not updates:
+            return updated_summaries
+        tasks = []
+        target_ids: list[str] = []
+        client = llm_client or self._get_llm_client()
+        for cid, memories in updates.items():
+            cat = store.memory_category_repo.categories.get(cid)
+            if not cat or not memories:
+                continue
+            prompt = self._build_category_summary_prompt(category=cat, new_memories=memories)
+            tasks.append(client.summarize(prompt, system_prompt=None))
+            target_ids.append(cid)
+        if not tasks:
+            return updated_summaries
+        summaries = await asyncio.gather(*tasks)
+        for cid, summary in zip(target_ids, summaries, strict=True):
+            cat = store.memory_category_repo.categories.get(cid)
+            if not cat:
+                continue
+            cleaned_summary = summary.replace("```markdown", "").replace("```", "").strip()
+            store.memory_category_repo.update_category(
+                category_id=cid,
+                summary=cleaned_summary,
+            )
+            updated_summaries[cid] = cleaned_summary
+        return updated_summaries
 
     def _build_category_summary_prompt(
         self,
@@ -1985,139 +1391,471 @@ Summary:"""
             new_memory_items_text=self._escape_prompt_value(new_items_text or "No new memory items."),
             target_length=target_length,
         )
-
-    async def _update_category_summaries(
+    ## for references
+    async def _persist_item_references(
         self,
-        updates: dict[str, list[tuple[str, str]]] | dict[str, list[str]],
-        ctx: Context,
+        *,
+        updated_summaries: dict[str, str],
+        category_updates: dict[str, list[tuple[str, str]]],
         store: Database,
-        llm_client: Any | None = None,
-    ) -> dict[str, str]:
+    ) -> None:
         """
-        Update category summaries based on new memory items.
+        Persist ref_id to items that are referenced in category summaries.
 
-        Returns:
-            dict mapping category_id -> updated summary text
+        This function:
+        1. Extracts all [ref:xxx] patterns from updated summaries
+        2. Builds a mapping of short_id -> full item_id for all items in category_updates
+        3. For items whose short_id appears in the references, updates their extra column
+           with {"ref_id": short_id}
         """
-        updated_summaries: dict[str, str] = {}
-        if not updates:
-            return updated_summaries
-        tasks = []
-        target_ids: list[str] = []
-        client = llm_client or self._get_llm_client()
-        for cid, memories in updates.items():
-            cat = store.memory_category_repo.categories.get(cid)
-            if not cat or not memories:
-                continue
-            prompt = self._build_category_summary_prompt(category=cat, new_memories=memories)
-            tasks.append(client.summarize(prompt, system_prompt=None))
-            target_ids.append(cid)
-        if not tasks:
-            return updated_summaries
-        summaries = await asyncio.gather(*tasks)
-        for cid, summary in zip(target_ids, summaries, strict=True):
-            cat = store.memory_category_repo.categories.get(cid)
-            if not cat:
-                continue
-            cleaned_summary = summary.replace("```markdown", "").replace("```", "").strip()
-            store.memory_category_repo.update_category(
-                category_id=cid,
-                summary=cleaned_summary,
-            )
-            updated_summaries[cid] = cleaned_summary
-        return updated_summaries
+        # Extract all referenced short IDs from summaries
+        referenced_short_ids = self._extract_refs_from_summaries(updated_summaries)
+        if not referenced_short_ids:
+            return
 
-    def _parse_conversation_preprocess(self, raw: str) -> tuple[str | None, str | None]:
-        conversation = self._extract_tag_content(raw, "conversation")
-        summary = self._extract_tag_content(raw, "summary")
-        return conversation, summary
+        # Build mapping of short_id -> full item_id for all items in category_updates
+        short_id_to_item_id: dict[str, str] = {}
+        for item_tuples in category_updates.values():
+            for item_id, _ in item_tuples:
+                short_id = self._build_item_ref_id(item_id)
+                short_id_to_item_id[short_id] = item_id
 
-    def _parse_multimodal_response(self, raw: str, content_tag: str, caption_tag: str) -> tuple[str | None, str | None]:
+        # Update extra column for referenced items
+        for short_id in referenced_short_ids:
+            matched_item_id = short_id_to_item_id.get(short_id)
+            if matched_item_id:
+                store.memory_item_repo.update_item(
+                    item_id=matched_item_id,
+                    extra={"ref_id": short_id},
+                )
+
+    def _extract_refs_from_summaries(self, summaries: dict[str, str]) -> set[str]:
         """
-        Parse multimodal preprocessing response (video, image, document, audio).
-        Extracts content and caption from XML-like tags.
+        Extract all [ref:xxx] references from summary texts.
 
         Args:
-            raw: Raw LLM response
-            content_tag: Tag name for main content (e.g., "detailed_description", "processed_content")
-            caption_tag: Tag name for caption (typically "caption")
+            summaries: dict mapping category_id -> summary text
 
         Returns:
-            Tuple of (content, caption)
+            Set of all referenced short IDs (the xxx part from [ref:xxx])
         """
-        content = self._extract_tag_content(raw, content_tag)
-        caption = self._extract_tag_content(raw, caption_tag)
+        from memu.utils.references import extract_references
 
-        # Fallback: if no tags found, try to use raw response as content
-        if not content:
-            content = raw.strip()
+        refs: set[str] = set()
+        for summary in summaries.values():
+            refs.update(extract_references(summary))
+        return refs
 
-        # Fallback for caption: use first sentence of content if no caption found
-        if not caption and content:
-            first_sentence = content.split(".")[0]
-            caption = first_sentence if len(first_sentence) <= 200 else first_sentence[:200]
+    def _build_item_ref_id(self, item_id: str) -> str:
+        return item_id.replace("-", "")[:6]
 
-        return content, caption
+    
+    ## ---------Step 7 --------------------
+    def _memorize_build_response(self, state: WorkflowState, step_context: Any) -> WorkflowState:
+        ctx = state["ctx"]
+        store = state["store"]
+        resources = [self._model_dump_without_embeddings(r) for r in state.get("resources", [])]
+        items = [self._model_dump_without_embeddings(item) for item in state.get("items", [])]
+        relations = [rel.model_dump() for rel in state.get("relations", [])]
+        category_ids = state.get("category_ids") or list(ctx.category_ids)
+        categories = [
+            self._model_dump_without_embeddings(store.memory_category_repo.categories[c]) for c in category_ids
+        ]
 
-    def _parse_conversation_preprocess_with_segments(
-        self, raw: str, original_text: str
-    ) -> tuple[str | None, list[dict[str, int | str]] | None]:
+        if len(resources) == 1:
+            response = {
+                "resource": resources[0],
+                "items": items,
+                "categories": categories,
+                "relations": relations,
+            }
+        else:
+            response = {
+                "resources": resources,
+                "items": items,
+                "categories": categories,
+                "relations": relations,
+            }
+        state["response"] = response
+        return state
+
+    
+    ## ----------Step 8 -------------------------
+    def _save_categories_markdown(self, state: WorkflowState, step_context: Any) -> WorkflowState:
         """
-        Parse conversation preprocess response and extract segments.
-        Returns: (conversation_text, segments)
+        Step 8: Save updated categories to markdown files.
+        
+        This step runs after category summaries are updated and saves
+        the updated categories to local .md files.
+        
+        Args:
+            state: Current workflow state
+            step_context: Step execution context
+            
+        Returns:
+            Updated workflow state with markdown_files_saved count
         """
-        conversation = self._extract_tag_content(raw, "conversation")
-        segments = self._extract_segments_with_fallback(raw)
-        return conversation, segments
-
-    def _extract_segments_with_fallback(self, raw: str) -> list[dict[str, int | str]] | None:
-        segments = self._segments_from_json_payload(raw)
-        if segments is not None:
-            return segments
-        try:
-            blob = self._extract_json_blob(raw)
-        except Exception:
-            logging.exception("Failed to extract segments from conversation preprocess response")
-            return None
-        return self._segments_from_json_payload(blob)
-
-    def _segments_from_json_payload(self, payload: str) -> list[dict[str, int | str]] | None:
-        try:
-            parsed = json.loads(payload)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        return self._segments_from_parsed_data(parsed)
-
-    @staticmethod
-    def _segments_from_parsed_data(parsed: Any) -> list[dict[str, int | str]] | None:
-        if not isinstance(parsed, dict):
-            return None
-        segments_data = parsed.get("segments")
-        if not isinstance(segments_data, list):
-            return None
-        segments: list[dict[str, int | str]] = []
-        for seg in segments_data:
-            if isinstance(seg, dict) and "start" in seg and "end" in seg:
+        store = state.get("store")
+        if not store:
+            logger.warning("[Markdown] No store in state, skipping markdown save")
+            return state
+        
+        # Get category updates from state
+        category_updates = state.get("category_updates", {})
+        if not category_updates:
+            logger.debug("[Markdown] No category updates to save")
+            state["markdown_files_saved"] = 0
+            return state
+        
+        # Get updated category IDs
+        updated_category_ids = list(category_updates.keys())
+        
+        # Save each updated category to markdown
+        saved_count = 0
+        saved_paths = []
+        
+        # Access the markdown handler from the service
+        # Note: You need to ensure the handler is accessible
+        if not hasattr(self, 'category_md_handler'):
+            logger.warning("[Markdown] No category_md_handler found, skipping save")
+            state["markdown_files_saved"] = 0
+            return state
+        
+        for cat_id in updated_category_ids:
+            category = store.memory_category_repo.categories.get(cat_id)
+            if category:
                 try:
-                    segment: dict[str, int | str] = {
-                        "start": int(seg["start"]),
-                        "end": int(seg["end"]),
-                    }
-                    if "caption" in seg and isinstance(seg["caption"], str):
-                        segment["caption"] = seg["caption"]
-                    segments.append(segment)
-                except (TypeError, ValueError):
-                    continue
-        return segments or None
+                    filepath = self.category_md_handler.save_category(category)
+                    saved_paths.append(str(filepath))
+                    logger.info(f"[Markdown] Saved category '{category.name}' to {filepath}")
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"[Markdown] Failed to save category {cat_id}: {e}")
+        
+        logger.info(f"[Markdown] Saved {saved_count} category markdown files")
+        
+        # Add saved info to state
+        state["markdown_files_saved"] = saved_count
+        state["markdown_file_paths"] = saved_paths
+        
+        return state
+
+    ## -------------------------------------------
+
+    ## init method---------------------------
+    def _resolve_memory_types(self) -> list[MemoryType]:
+        configured_types = self.memorize_config.memory_types or DEFAULT_MEMORY_TYPES
+        return [cast(MemoryType, mtype) for mtype in configured_types] 
+   
+    async def _ensure_categories_ready(
+        self, ctx: Context, store: Database, user_scope: Mapping[str, Any] | None = None
+    ) -> None:
+        if ctx.categories_ready:
+            return
+        if ctx.category_init_task:
+            await ctx.category_init_task
+            ctx.category_init_task = None
+            return
+        await self._initialize_categories(ctx, store, user_scope)
+
+    async def _initialize_categories(
+        self, ctx: Context, store: Database, user: Mapping[str, Any] | None = None
+    ) -> None:
+        if ctx.categories_ready:
+            return
+        if not self.category_configs:
+            ctx.categories_ready = True
+            return
+        cat_texts = [self._category_embedding_text(cfg) for cfg in self.category_configs]
+        cat_vecs = await self._get_llm_client("embedding").embed(cat_texts)
+        ctx.category_ids = []
+        ctx.category_name_to_id = {}
+        for cfg, vec in zip(self.category_configs, cat_vecs, strict=True):
+            name = cfg.name.strip() or "Untitled"
+            description = cfg.description.strip()
+            cat = store.memory_category_repo.get_or_create_category(
+                name=name, description=description, embedding=vec, user_data=dict(user or {})
+            )
+            ctx.category_ids.append(cat.id)
+            ctx.category_name_to_id[name.lower()] = cat.id
+        ctx.categories_ready = True
 
     @staticmethod
-    def _extract_tag_content(raw: str, tag: str) -> str | None:
-        pattern = re.compile(rf"<{tag}>(.*?)</{tag}>", re.IGNORECASE | re.DOTALL)
-        match = pattern.search(raw)
-        if not match:
-            return None
-        content = match.group(1).strip()
-        return content or None
+    def _category_embedding_text(cat: CategoryConfig) -> str:
+        name = cat.name.strip() or "Untitled"
+        desc = cat.description.strip()
+        return f"{name}: {desc}" if desc else name
+
+
+    ###----Step 2 and step 6-----------------
+    @staticmethod
+    def _resolve_custom_prompt(prompt: str | CustomPrompt, templates: Mapping[str, str]) -> str:
+        if isinstance(prompt, str):
+            return prompt
+        valid_blocks = [
+            (block.ordinal, name, block.prompt or templates.get(name))
+            for name, block in prompt.items()
+            if (block.ordinal >= 0 and (block.prompt or templates.get(name)))
+        ]
+        if not valid_blocks:
+            # raise ValueError(f"No valid blocks contained in custom prompt: {prompt}")
+            return ""
+        sorted_blocks = sorted(valid_blocks)
+        return "\n\n".join(block for (_, _, block) in sorted_blocks if block is not None)
+    
+    ##----unused -------------------------------------
+    async def _fetch_and_preprocess_resource(
+        self, resource_url: str, modality: str, llm_client: Any | None = None
+    ) -> tuple[str, list[dict[str, str | None]]]:
+        """
+        Fetch and preprocess a resource.
+
+        Returns:
+            Tuple of (local_path, preprocessed_resources)
+            where preprocessed_resources is a list of dicts with 'text' and 'caption'
+        """
+        local_path, text = await self.fs.fetch(resource_url, modality)
+        preprocessed_resources = await self._preprocess_resource_url(
+            local_path=local_path,
+            text=text,
+            modality=modality,
+            llm_client=llm_client,
+        )
+        return local_path, preprocessed_resources
+
+    def _resolve_summary_prompt(self, modality: str, override: str | None) -> str | None:
+        memo_settings = self.memorize_config
+        result = memo_settings.multimodal_preprocess_prompts.get(modality)
+        if override:
+            return override
+        if result is None:
+            return (
+                memo_settings.default_category_summary_prompt
+                if isinstance(memo_settings.default_category_summary_prompt, str)
+                else None
+            )
+        return result if isinstance(result, str) else None
+
+    def _resolve_multimodal_preprocess_prompt(self, modality: str) -> str | None:
+        memo_settings = self.memorize_config
+        result = memo_settings.multimodal_preprocess_prompts.get(modality)
+        return result if isinstance(result, str) else None
+    
+    async def _generate_structured_entries(
+        self,
+        *,
+        resource_url: str,
+        modality: str,
+        memory_types: list[MemoryType],
+        text: str | None,
+        categories_prompt_str: str,
+        segments: list[dict[str, int | str]] | None = None,
+        llm_client: Any | None = None,
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        if not memory_types:
+            return []
+
+        client = llm_client or self._get_llm_client()
+        if text:
+            entries = await self._generate_text_entries(
+                resource_text=text,
+                modality=modality,
+                memory_types=memory_types,
+                categories_prompt_str=categories_prompt_str,
+                segments=segments,
+                llm_client=client,
+            )
+            return entries
+            # if entries:
+            #     return entries
+            # no_result_entry = self._build_no_result_fallback(memory_types[0], resource_url, modality)
+            # return [no_result_entry]
+
+        return []
+        # return self._build_no_text_fallback(memory_types, resource_url, modality)
+
+    async def _generate_text_entries(
+        self,
+        *,
+        resource_text: str,
+        modality: str,
+        memory_types: list[MemoryType],
+        categories_prompt_str: str,
+        segments: list[dict[str, int | str]] | None,
+        llm_client: Any | None = None,
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        if modality == "conversation" and segments:
+            segment_entries = await self._generate_entries_for_segments(
+                resource_text=resource_text,
+                segments=segments,
+                memory_types=memory_types,
+                categories_prompt_str=categories_prompt_str,
+                llm_client=llm_client,
+            )
+            if segment_entries:
+                return segment_entries
+        return await self._generate_entries_from_text(
+            resource_text=resource_text,
+            memory_types=memory_types,
+            categories_prompt_str=categories_prompt_str,
+            llm_client=llm_client,
+        )
+
+    async def _generate_entries_for_segments(
+        self,
+        *,
+        resource_text: str,
+        segments: list[dict[str, int | str]],
+        memory_types: list[MemoryType],
+        categories_prompt_str: str,
+        llm_client: Any | None = None,
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        entries: list[tuple[MemoryType, str, list[str]]] = []
+        lines = resource_text.split("\n")
+        max_idx = len(lines) - 1
+        for segment in segments:
+            start_idx = int(segment.get("start", 0))
+            end_idx = int(segment.get("end", max_idx))
+            segment_text = self._extract_segment_text(lines, start_idx, end_idx)
+            if not segment_text:
+                continue
+            segment_entries = await self._generate_entries_from_text(
+                resource_text=segment_text,
+                memory_types=memory_types,
+                categories_prompt_str=categories_prompt_str,
+                llm_client=llm_client,
+            )
+            entries.extend(segment_entries)
+        return entries
+
+    async def _generate_entries_from_text(
+        self,
+        *,
+        resource_text: str,
+        memory_types: list[MemoryType],
+        categories_prompt_str: str,
+        llm_client: Any | None = None,
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        if not memory_types:
+            return []
+        client = llm_client or self._get_llm_client()
+        prompts = [
+            self._build_memory_type_prompt(
+                memory_type=mtype,
+                resource_text=resource_text,
+                categories_str=categories_prompt_str,
+            )
+            for mtype in memory_types
+        ]
+        valid_prompts = [prompt for prompt in prompts if prompt.strip()]
+        tasks = [client.summarize(prompt_text) for prompt_text in valid_prompts]
+        responses = await asyncio.gather(*tasks)
+        return self._parse_structured_entries(memory_types, responses)
+    
+    def _parse_structured_entries(
+        self, memory_types: list[MemoryType], responses: Sequence[str]
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        entries: list[tuple[MemoryType, str, list[str]]] = []
+        for mtype, response in zip(memory_types, responses, strict=True):
+            parsed = self._parse_memory_type_response_xml(response)
+            # if not parsed:
+            #     fallback_entry = response.strip()
+            #     if fallback_entry:
+            #         entries.append((mtype, fallback_entry, []))
+            #     continue
+            for entry in parsed:
+                content = (entry.get("content") or "").strip()
+                if not content:
+                    continue
+                cat_names = [c.strip() for c in entry.get("categories", []) if isinstance(c, str) and c.strip()]
+                entries.append((mtype, content, cat_names))
+        return entries
+
+    def _extract_segment_text(self, lines: list[str], start_idx: int, end_idx: int) -> str | None:
+        segment_lines = []
+        for line in lines:
+            match = re.match(r"\[(\d+)\]", line)
+            if not match:
+                continue
+            idx = int(match.group(1))
+            if start_idx <= idx <= end_idx:
+                segment_lines.append(line)
+        return "\n".join(segment_lines) if segment_lines else None
+
+    def _build_no_text_fallback(
+        self, memory_types: list[MemoryType], resource_url: str, modality: str
+    ) -> list[tuple[MemoryType, str, list[str]]]:
+        fallback = f"Resource {resource_url} ({modality}) stored. No text summary in v0."
+        return [(mtype, f"{fallback} (memory type: {mtype}).", []) for mtype in memory_types]
+
+    def _build_no_result_fallback(
+        self, memory_type: MemoryType, resource_url: str, modality: str
+    ) -> tuple[MemoryType, str, list[str]]:
+        fallback = f"Resource {resource_url} ({modality}) stored. No structured memories generated."
+        return memory_type, fallback, []
+
+    def _start_category_initialization(self, ctx: Context, store: Database) -> None:
+        if ctx.categories_ready:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop:
+            ctx.category_init_task = loop.create_task(self._initialize_categories(ctx, store))
+        else:
+            asyncio.run(self._initialize_categories(ctx, store))
+
+    def _format_categories_for_prompt(self, categories: list[CategoryConfig]) -> str:
+        if not categories:
+            return "No categories provided."
+        lines = []
+        for cat in categories:
+            name = cat.name.strip() or "Untitled"
+            desc = cat.description.strip()
+            lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+        return "\n".join(lines)
+
+    def _add_conversation_indices(self, conversation: str) -> str:
+        """
+        Add [INDEX] markers to each line of the conversation.
+
+        Args:
+            conversation: Raw conversation text with lines
+
+        Returns:
+            Conversation with [INDEX] markers prepended to each non-empty line
+        """
+        lines = conversation.split("\n")
+        indexed_lines = []
+        index = 0
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped:  # Only index non-empty lines
+                indexed_lines.append(f"[{index}] {line}")
+                index += 1
+            else:
+                # Preserve empty lines without indexing
+                indexed_lines.append(line)
+
+        return "\n".join(indexed_lines)
+
+    def _build_memory_type_prompt(self, *, memory_type: MemoryType, resource_text: str, categories_str: str) -> str:
+        configured_prompt = self.memorize_config.memory_type_prompts.get(memory_type)
+        if configured_prompt is None:
+            template = MEMORY_TYPE_PROMPTS.get(memory_type)
+        elif isinstance(configured_prompt, str):
+            template = configured_prompt
+        else:
+            template = self._resolve_custom_prompt(
+                configured_prompt, MEMORY_TYPE_CUSTOM_PROMPTS.get(memory_type, CUSTOM_TYPE_CUSTOM_PROMPTS)
+            )
+        if not template:
+            return resource_text
+        safe_resource = self._escape_prompt_value(resource_text)
+        safe_categories = self._escape_prompt_value(categories_str)
+        return template.format(resource=safe_resource, categories_str=safe_categories)
 
     def _parse_memory_type_response(self, raw: str) -> list[dict[str, Any]]:
         if not raw:
@@ -2217,3 +1955,15 @@ Summary:"""
             return []
         else:
             return result
+
+    
+    
+   
+   
+
+    
+   
+    
+   
+    
+    
