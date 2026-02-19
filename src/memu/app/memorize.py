@@ -1119,7 +1119,7 @@ Summary:"""
         resources: list[Resource] = []
         items: list[MemoryItem] = []
         relations: list[CategoryItem] = []
-        category_updates: dict[str, list[tuple[str, str]]] = {}
+        category_updates: dict[str, list[tuple[str, str]]] = {} ## validation
         user_scope = state.get("user", {})
 
         for plan in state.get("resource_plans", []):
@@ -1207,7 +1207,7 @@ Summary:"""
         store: Database,
         embed_client: Any | None = None,
         user: Mapping[str, Any] | None = None,
-    ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]:
+    ) -> tuple[list[MemoryItem], list[CategoryItem], dict[str, list[tuple[str, str]]]]: ## validations
         """
         Persist memory items from structured entries (table format).
         
@@ -1229,7 +1229,7 @@ Summary:"""
         item_embeddings = await client.embed(summary_payloads) if summary_payloads else []
         items: list[MemoryItem] = []
         rels: list[CategoryItem] = []
-        category_memory_updates: dict[str, list[tuple[str, str]]] = {}
+        category_memory_updates: dict[str, list[tuple[str, str]]] = {} ## validation 
 
         reinforce = self.memorize_config.enable_item_reinforcement
         
@@ -1253,7 +1253,7 @@ Summary:"""
             for cid in mapped_cat_ids:
                 rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
                 # Store (item_id, summary) tuple for reference support
-                category_memory_updates.setdefault(cid, []).append((item.id, table_string))
+                category_memory_updates.setdefault(cid, []).append((item.id, item.memory_type,table_string,))
 
         logger.info(f"[Persist] Created {len(items)} memory items with table format")
         return items, rels, category_memory_updates
@@ -1291,7 +1291,7 @@ Summary:"""
     
     async def _update_category_summaries(
         self,
-        updates: dict[str, list[tuple[str, str]]] | dict[str, list[str]],
+        updates: dict[str, list[tuple[str, str, str]]] | dict[str, list[str]], ## validation
         ctx: Context,
         store: Database,
         llm_client: Any | None = None,
@@ -1302,7 +1302,11 @@ Summary:"""
         Returns:
             dict mapping category_id -> updated summary text
         """
-        updated_summaries: dict[str, str] = {}
+        updated_summaries: dict[str, str] = {} ### maybe validation required 
+        
+        print("updates jnkjn")
+        print(updates)
+        print("jhsdbfjsdhf")
         if not updates:
             return updated_summaries
         tasks = []
@@ -1317,7 +1321,7 @@ Summary:"""
             target_ids.append(cid)
         if not tasks:
             return updated_summaries
-        summaries = await asyncio.gather(*tasks)
+        summaries = await asyncio.gather(*tasks) ## final updated summary for each category in parallel
         for cid, summary in zip(target_ids, summaries, strict=True):
             cat = store.memory_category_repo.categories.get(cid)
             if not cat:
@@ -1328,6 +1332,9 @@ Summary:"""
                 summary=cleaned_summary,
             )
             updated_summaries[cid] = cleaned_summary
+        print("updated summaries dkjfbsjkhdfbv")
+        print(updated_summaries)
+        print("sjhdfbksjf")
         return updated_summaries
 
     def _build_category_summary_prompt(
@@ -1354,19 +1361,22 @@ Summary:"""
                 PROMPT_WITH_REFS as category_summary_prompt,
             )
 
-            tuple_memories = cast(list[tuple[str, str]], new_memories)
+            tuple_memories = cast(list[tuple[str, str,str]], new_memories)
             new_items_text = "\n".join(
-                f"- [{self._build_item_ref_id(item_id)}] {summary}"
-                for item_id, summary in tuple_memories
+                f"- [{self._build_item_ref_id(item_id)}] [{memory_type}] {summary}"
+                for item_id,memory_type, summary in tuple_memories
                 if summary.strip()
             )
         else:
             category_summary_prompt = CATEGORY_SUMMARY_PROMPT
             category_summary_custom_prompt = CATEGORY_SUMMARY_CUSTOM_PROMPT
 
+            print("new memories skjhfbjs")
+            print(new_memories)
+            print("sdjhfbsj")
             if new_memories and isinstance(new_memories[0], tuple):
-                tuple_memories = cast(list[tuple[str, str]], new_memories)
-                new_items_text = "\n".join(f"- {summary}" for item_id, summary in tuple_memories if summary.strip())
+                tuple_memories = cast(list[tuple[str, str,str]], new_memories)
+                new_items_text = "\n".join( f"- [{memory_type}] {summary}" for item_id, memory_type, summary in tuple_memories if summary.strip()) ## memory text for final memory category update
             else:
                 str_memories = cast(list[str], new_memories)
                 new_items_text = "\n".join(f"- {m}" for m in str_memories if m.strip())
@@ -1416,7 +1426,7 @@ Summary:"""
         # Build mapping of short_id -> full item_id for all items in category_updates
         short_id_to_item_id: dict[str, str] = {}
         for item_tuples in category_updates.values():
-            for item_id, _ in item_tuples:
+            for item_id, _ , __ in item_tuples:
                 short_id = self._build_item_ref_id(item_id)
                 short_id_to_item_id[short_id] = item_id
 
