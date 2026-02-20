@@ -615,49 +615,19 @@ async def main():
     print(f"Provider info: {service._provider_summary()}")
     
 
-    # Add markdown save step to workflow
-    # save_markdown_handler = create_save_markdown_step_handler(service.category_md_handler)
-    # save_markdown_step = WorkflowStep(
-    #     step_id="save_categories_markdown",
-    #     role="save_markdown",
-    #     handler=save_markdown_handler,
-    #     requires={"category_updates", "ctx", "store"},
-    #     produces={"markdown_files_saved"},
-    #     capabilities=set(),
-    # )
-
-    # service.insert_step_after(
-    #     target_step_id="persist_index",
-    #     new_step=save_markdown_step,
-    #     pipeline="memorize"
-    # )
-
-
-    result = await service.memorize(
-                    resource_url="https://www.linkedin.com/posts/pauliusztin_i-created-an-ai-agent-to-write-a-substack-activity-7420095430807691266-fQ1U?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
-                    user={"user_id": "user123", "workspace_id": "workspace-alpha"}
-                )
-
-
-    # Test memorize function
-    # print("\n📝 Testing memorize function...")
     # result = await service.memorize(
-    #     resource_url="tests/test_convers3.txt",
-    #     modality="conversation",
-    #     user={
-    #         "user_id": "user4568",  # Different user
-    #         "workspace_id": "workspace-alphahbj"  # Same workspace
-    #     }
-    # )
-    #print(f"Memorize result: {result}")
+    #                 resource_url="https://www.linkedin.com/posts/pauliusztin_i-created-an-ai-agent-to-write-a-substack-activity-7420095430807691266-fQ1U?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
+    #                 user={"user_id": "user123", "workspace_id": "workspace-alpha"}
+    #             )
+
     
     #Test retrieve function
-    # print("\n🔍 Testing retrieve function...")
-    # retrieve_result = await service.retrieve(
-    #     queries=[{"role": "user", "content": {"text": "Tell me about agents observability?"}}],
-    #     where={"user_id": "user123", "workspace_id": "workspace-alphah"}
-    # )
-    # print(f"Retrieve result: {retrieve_result}")
+    print("\n🔍 Testing retrieve function...")
+    retrieve_result = await service.retrieve(
+        queries=[{"role": "user", "content": {"text": "Tell me about agents observability?"}}],
+        where={"user_id": "user123", "workspace_id": "workspace-alpha"}
+    )
+    print(f"Retrieve result: {retrieve_result}")
     
     # List memory items
     print("\n📋 Listing memory items...")
