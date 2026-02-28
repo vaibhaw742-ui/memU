@@ -42,7 +42,8 @@ def include_object(object: Any, name: str, type_: str, reflected: bool, compare_
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    import os 
+    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
