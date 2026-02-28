@@ -23,7 +23,7 @@ from memu.config.settings import (
     MemorizeConfig, 
     CategoryConfig,
     CustomPrompt,
-    PromptBlock
+    PromptBlock, RetrieveConfig
 )
 
 # DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
@@ -578,7 +578,8 @@ async def main():
         database_config={
             "metadata_store": {
                 "provider": "postgres",
-                "dsn": os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/memu")
+                # "dsn": os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/memu")
+                "dsn": "postgresql://postgres:postgres@localhost:5432/memu"
             }
         },
         llm_profiles={
@@ -608,7 +609,10 @@ async def main():
                                 ],
                                 enable_item_references=True
                             ) 
-        ,category_md_output_dir="./categories"
+        ,category_md_output_dir="./categories",
+        retrieve_config=RetrieveConfig(
+            route_intention=False, method="llm"
+        )
     )
     
     print("✅ MemoryService initialized successfully!")

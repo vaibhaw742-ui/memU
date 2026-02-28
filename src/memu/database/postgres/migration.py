@@ -28,6 +28,23 @@ def make_alembic_config(*, dsn: str, scope_model: type[Any]) -> AlembicConfig:
     return cfg
 
 
+def _ensure_prerequisites(engine: Any) -> None:
+    """
+    Ensure pgvector extension and learning schema exist.
+    Runs in its own connection so failures don't affect the migration transaction.
+    """
+    with engine.connect() as conn:
+        # Enable pgvector extension
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        logger.info("pgvector extension enabled")
+
+        # Ensure learning schema exists
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS learning"))
+        logger.info("learning schema ensured")
+
+        conn.commit()
+
+
 def run_migrations(*, dsn: str, scope_model: type[Any], ddl_mode: DDLMode = "create") -> None:
     """
     Run database migrations based on the ddl_mode setting.
@@ -41,36 +58,26 @@ def run_migrations(*, dsn: str, scope_model: type[Any], ddl_mode: DDLMode = "cre
     engine = create_engine(dsn)
 
     if ddl_mode == "create":
-        # Enable pgvector extension if needed (requires superuser or extension already installed)
-        with engine.connect() as conn:
-            try:
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                conn.commit()
-                logger.info("pgvector extension enabled")
-            except Exception as e:
-                # Check if extension already exists
-                result = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).fetchone()
-                if result:
-                    logger.info("pgvector extension already installed")
-                else:
-                    msg = (
-                        "Failed to create pgvector extension. "
-                        "Please run 'CREATE EXTENSION vector;' as a superuser first."
-                    )
-                    raise RuntimeError(msg) from e
+        _ensure_prerequisites(engine)
 
         # Create all tables that don't exist
         metadata.create_all(engine)
         logger.info("Database tables created/verified")
+
     elif ddl_mode == "validate":
         # Validate that all expected tables exist
         inspector = inspect(engine)
-        existing_tables = set(inspector.get_table_names())
-        expected_tables = set(metadata.tables.keys())
+        existing_tables = set(inspector.get_table_names(schema="learning"))  # ← fixed: check learning schema
+        expected_tables = {
+            "resources",
+            "memory_items",
+            "memory_categories",
+            "category_items",
+        }
         missing_tables = expected_tables - existing_tables
 
         if missing_tables:
-            msg = f"Database schema validation failed. Missing tables: {sorted(missing_tables)}"
+            msg = f"Database schema validation failed. Missing tables in learning schema: {sorted(missing_tables)}"
             raise RuntimeError(msg)
         logger.info("Database schema validated successfully")
 

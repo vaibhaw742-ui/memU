@@ -59,7 +59,7 @@ def get_sqlalchemy_models(*, scope_model: type[BaseModel] | None = None) -> SQLA
     if cached:
         return cached
 
-    metadata_obj = MetaData()
+    metadata_obj = MetaData(schema="learning")
 
     resource_model = build_table_model(
         scope,

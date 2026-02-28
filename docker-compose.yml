@@ -26,7 +26,7 @@ services:
     container_name: memu-app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/memu
+      DATABASE_URL: ${DATABASE_URL}
       AIRTOP_API_KEY: ${AIRTOP_API_KEY}
     depends_on:
       postgres:
