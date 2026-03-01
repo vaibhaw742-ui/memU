@@ -4,7 +4,7 @@
 from pathlib import Path
 import sys
 
-from anyio import Path
+# from anyio import Path
 
 
 project_root = Path(__file__).parent.parent
