@@ -471,107 +471,6 @@ New Memory Items (append these): {new_memory_items_text}
         )
 
 
-# custom_agent_category_summary = CustomPrompt(
-#             objective=PromptBlock(
-#                 ordinal=10,
-#                 prompt="""
-# # Agent Memory Organizer
-
-# Maintain a running chronological knowledge log by appending new memory items to the existing log.
-
-# ## Format Requirements
-# - Preserve the existing log exactly as-is
-# - Append new memory items in date-wise order (newest first)
-# - If a date already exists in the log, append new memory_type sections under that date
-# - If a date is new, insert it in the correct chronological position
-# - Use the exact memory_type value from each memory item as the section header (### )
-# - Group entries by date, then by memory_type within each date
-# - Preserve the original index-style table structure for each memory item
-# - No merging, no summarizing, no rewriting of existing content
-# - Maximum {target_length} tokens
-# """
-#             ),
-#             workflow=PromptBlock(
-#                 ordinal=20,
-#                 prompt="""
-# # Organization Process
-# 1. Take the existing log from original_content as the base state — output it exactly as received
-# 2. Parse all incoming new memory items
-# 3. For each new memory item extract:
-#    - date → used as the ## Date header
-#    - memory_type → used verbatim as the ### section header
-#    - table → rendered as-is in the index-style table under that section
-# 4. For each new item:
-#    a. If its date already exists in the log → append the new ### memory_type section under that date block
-#    b. If its date is new → insert a new ## date block in the correct chronological position (newest first)
-# 5. Do not alter, reorder, or rewrite any existing log content
-# """
-#             ),
-#             output=PromptBlock(
-#                 ordinal=50,
-#                 prompt="""
-# # Output Format
-
-# Each memory item maps to the output like this:
-# - memory item date      → ## [Date: YYYY-MM-DD]
-# - memory item memory_type → ### {memory_type}  ← use exact value from the memory item
-# - memory item table     → index-style table rows below the header
-# ```markdown
-# # {category} — Memory Log
-
-# ## [Date: YYYY-MM-DD]  ← newest date first
-
-# ### {memory_type}  ← exact memory_type from memory item (e.g., "Model Architecture", "Training Strategy")
-
-# | Index | Topic | Sub-Topic | Description |
-# |-------|-------|-----------|-------------|
-# | 1     | ...   | -         | ...         |
-# | 1.1   | ...   | ...       | ...         |
-# | 1.2   | ...   | ...       | ...         |
-# | 2     | ...   | -         | ...         |
-# | 2.1   | ...   | ...       | ...         |
-
-# ---
-
-# ### {memory_type}  ← another memory_type under same date if applicable
-
-# | Index | Topic | Sub-Topic | Description |
-# |-------|-------|-----------|-------------|
-# | ...   | ...   | ...       | ...         |
-
-# ---
-
-# ## [Date: YYYY-MM-DD]  ← older date
-
-# ### {memory_type}
-
-# | Index | Topic | Sub-Topic | Description |
-# |-------|-------|-----------|-------------|
-# | ...   | ...   | ...       | ...         |
-
-# ---
-# ```
-
-# Rules:
-# - ALWAYS start with the full existing log before appending anything
-# - ### header must be the exact memory_type string from the memory item — do not rename, generalize, or infer
-# - New date blocks go in the correct chronological position relative to existing dates
-# - New memory_type sections under an existing date go AFTER existing sections for that date
-# - Never remove or modify any existing entry
-
-# Target length: {target_length} tokens
-# """
-#             ),
-#             input=PromptBlock(
-#                 ordinal=90,
-#                 prompt="""
-# Category: {category}
-# Existing Log (preserve as base state): {original_content}
-# New Memory Items (append these): {new_memory_items_text}
-# """
-#             )
-#         )
-
 async def main():
     # Initialize the service
     service = MemoryService(
@@ -619,10 +518,10 @@ async def main():
     print(f"Provider info: {service._provider_summary()}")
     
 
-    # result = await service.memorize(
-    #                 resource_url="https://www.linkedin.com/posts/pauliusztin_i-created-an-ai-agent-to-write-a-substack-activity-7420095430807691266-fQ1U?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
-    #                 user={"user_id": "user123", "workspace_id": "workspace-alpha"}
-    #             )
+    result = await service.memorize(
+                    resource_url="https://www.linkedin.com/posts/pauliusztin_i-created-an-ai-agent-to-write-a-substack-activity-7420095430807691266-fQ1U?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
+                    user={"user_id": "user123", "workspace_id": "workspace-alpha"}
+                )
 
     
     #Test retrieve function
