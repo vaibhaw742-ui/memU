@@ -477,8 +477,8 @@ async def main():
         database_config={
             "metadata_store": {
                 "provider": "postgres",
-                # "dsn": os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/memu")
-                "dsn": "postgresql://postgres:postgres@localhost:5432/memu"
+                "dsn": os.getenv("DATABASE_URL")
+
             }
         },
         llm_profiles={
