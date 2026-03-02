@@ -20,6 +20,7 @@ SCHEMA = "learning"
 
 class DefaultScope(PydanticBaseModel):
     user_id: str
+    workspace_id: str
 
 
 def get_target_metadata() -> MetaData | None:
