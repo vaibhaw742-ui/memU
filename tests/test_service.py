@@ -520,7 +520,7 @@ async def main():
 
     result = await service.memorize(
                     resource_url="https://www.linkedin.com/posts/pauliusztin_i-created-an-ai-agent-to-write-a-substack-activity-7420095430807691266-fQ1U?utm_source=share&utm_medium=member_desktop&rcm=ACoAACmrL44B-pNi9lNjFQtuPtX_ODwJk7-cC-0",
-                    user={"user_id": "user123", "workspace_id": "workspace-alpha"}
+                    user={"user_id": "user123"}
                 )
 
     
@@ -528,7 +528,7 @@ async def main():
     print("\n🔍 Testing retrieve function...")
     retrieve_result = await service.retrieve(
         queries=[{"role": "user", "content": {"text": "Tell me about agents observability?"}}],
-        where={"user_id": "user123", "workspace_id": "workspace-alpha"}
+        where={"user_id": "user123"}
     )
     print(f"Retrieve result: {retrieve_result}")
     
