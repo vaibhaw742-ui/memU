@@ -24,27 +24,27 @@ services:
   memu:
     build:
       context: .
-      dockerfile: Dockerfile.dev    # ← use dev dockerfile
+      dockerfile: Dockerfile
     container_name: memu-app
+    command: /bin/sh -c ". .venv/bin/activate && alembic upgrade head && uvicorn src.memu.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/memu}
       AIRTOP_API_KEY: ${AIRTOP_API_KEY}
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - ./examples:/app/examples
-      - ./tests:/app/tests
-      - memu_data:/app/data
+      - .:/app                  # full codebase mounted for --reload
+      - /app/.venv              # preserve container's .venv
     networks:
       - memu-network
-    stdin_open: true
-    tty: true
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  memu_data:
 
 networks:
   memu-network:

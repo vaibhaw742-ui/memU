@@ -8,13 +8,13 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv using pip
+# Install uv
 RUN pip install uv
 
 # Copy project files
 COPY . .
 
-# Remove any local .venv that might have been copied (safe even if it doesn't exist)
+# Remove any local .venv that might have been copied
 RUN rm -rf .venv
 
 # Install dependencies
@@ -22,8 +22,6 @@ RUN uv venv && \
     . .venv/bin/activate && \
     uv pip install -e ".[postgres,langgraph,claude]"
 
-# Expose port
-EXPOSE 8001
+EXPOSE 8000
 
-# On startup: run migrations then start the app
-CMD ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/uvicorn memu.main:app --host 0.0.0.0 --port 8001"]
+CMD ["/bin/sh", "-c", ". .venv/bin/activate && alembic upgrade head && uvicorn src.memu.main:app --host 0.0.0.0 --port 8000"]
