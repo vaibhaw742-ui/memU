@@ -1,7 +1,4 @@
 from fastapi import FastAPI
+from memu.mcp_server import app as mcp_app
 
-app = FastAPI(title="Learning Service", version="0.1.0")
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+app = mcp_app
