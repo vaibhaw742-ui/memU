@@ -1,8 +1,11 @@
+import asyncio
+import json
 import os
 import re
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncpg
 
@@ -188,7 +191,6 @@ async def build_service_from_db() -> MemoryService:
     if rows:
         categories = [CategoryConfig(name=r["name"], description=r["description"]) for r in rows]
     else:
-        # fallback until onboarding is done
         categories = [CategoryConfig(name="general", description="General knowledge and everything else")]
 
     return MemoryService(
@@ -221,12 +223,19 @@ async def health():
     return {"status": "ok"}
 
 
+# ── SSE helper ────────────────────────────────────────────────────────────────
+
+def sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
 # ── Tool 1: Memorize URL ──────────────────────────────────────────────────────
 
 class MemorizeRequest(BaseModel):
     url: str
     user_id: str
     workspace_id: Optional[str] = None
+
 
 @app.post("/tools/memorize")
 async def memorize(req: MemorizeRequest):
@@ -237,7 +246,6 @@ async def memorize(req: MemorizeRequest):
         )
         updated_categories = [c.get("name") for c in result.get("categories", [])]
 
-        # Append to category .md files
         for cat in result.get("categories", []):
             summary = cat.get("summary") or cat.get("description", "")
             if summary:
@@ -255,12 +263,123 @@ async def memorize(req: MemorizeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Tool 1b: Memorize URL with SSE streaming ──────────────────────────────────
+
+@app.post("/tools/memorize/stream")
+async def memorize_stream(req: MemorizeRequest):
+    async def event_generator():
+        try:
+            yield sse("progress", {
+                "step": 1,
+                "status": "fetching",
+                "message": f"Got it! Fetching content from {req.url}..."
+            })
+
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def run_memorize():
+                try:
+                    await queue.put(("progress", {
+                        "step": 2,
+                        "status": "extracting",
+                        "message": "Extracting and processing content..."
+                    }))
+
+                    # Heartbeat task — reports every 30s while Airtop is working
+                    async def heartbeat():
+                        elapsed = 0
+                        while True:
+                            await asyncio.sleep(30)
+                            elapsed += 30
+                            await queue.put(("progress", {
+                                "step": 2,
+                                "status": "extracting",
+                                "message": f"Still processing... ({elapsed}s elapsed)"
+                            }))
+
+                    hb_task = asyncio.create_task(heartbeat())
+
+                    try:
+                        result = await service.memorize(
+                            resource_url=req.url,
+                            user={
+                                "user_id": req.user_id,
+                                "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID
+                            },
+                        )
+                    finally:
+                        hb_task.cancel()
+                        try:
+                            await hb_task
+                        except asyncio.CancelledError:
+                            pass
+
+                    await queue.put(("progress", {
+                        "step": 3,
+                        "status": "categorizing",
+                        "message": "Categorizing and saving to knowledge base..."
+                    }))
+
+                    updated_categories = [c.get("name") for c in result.get("categories", [])]
+
+                    for cat in result.get("categories", []):
+                        summary = cat.get("summary") or cat.get("description", "")
+                        if summary:
+                            append_item_to_category_md(cat.get("name", ""), summary[:120])
+
+                    await queue.put(("done", {
+                        "status": "ok",
+                        "user_id": req.user_id,
+                        "url": req.url,
+                        "items_extracted": len(result.get("items", [])),
+                        "categories": updated_categories,
+                        "message": f"✅ Saved to: {', '.join(updated_categories)}" if updated_categories else "✅ Saved to knowledge base"
+                    }))
+
+                except Exception as e:
+                    await queue.put(("error", {
+                        "status": "error",
+                        "message": f"❌ Failed: {str(e)}"
+                    }))
+
+            task = asyncio.create_task(run_memorize())
+
+            while True:
+                try:
+                    event, data = await asyncio.wait_for(queue.get(), timeout=900)  # 15 min max
+                    yield sse(event, data)
+                    if event in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield sse("error", {
+                        "status": "error",
+                        "message": "❌ Timeout: memorize did not complete within 15 minutes"
+                    })
+                    break
+
+            await task
+
+        except Exception as e:
+            yield sse("error", {"status": "error", "message": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
 # ── Tool 2: Retrieve / Search KB ─────────────────────────────────────────────
 
 class RetrieveRequest(BaseModel):
     query: str
     user_id: str
     workspace_id: Optional[str] = None
+
 
 @app.post("/tools/retrieve")
 async def retrieve(req: RetrieveRequest):
@@ -298,6 +417,7 @@ class ListItemsRequest(BaseModel):
     workspace_id: Optional[str] = None
     limit: int = 10
 
+
 @app.post("/tools/list_items")
 async def list_items(req: ListItemsRequest):
     try:
@@ -316,6 +436,7 @@ class ListCategoriesRequest(BaseModel):
     user_id: str
     workspace_id: Optional[str] = None
 
+
 @app.post("/tools/list_categories")
 async def list_categories(req: ListCategoriesRequest):
     try:
@@ -332,6 +453,7 @@ async def list_categories(req: ListCategoriesRequest):
 class ClearMemoryRequest(BaseModel):
     user_id: str
     workspace_id: Optional[str] = None
+
 
 @app.post("/tools/clear_memory")
 async def clear_memory(req: ClearMemoryRequest):
@@ -350,17 +472,15 @@ class CategoryPayload(BaseModel):
     name: str
     description: str
 
+
 class OnboardRequest(BaseModel):
     categories: list[CategoryPayload]
     user_id: str = DEFAULT_USER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
 
+
 @app.post("/admin/onboard")
 async def onboard(req: OnboardRequest):
-    """
-    Called at end of onboarding flow.
-    Saves all categories to DB, rebuilds service, writes .md files.
-    """
     global service
     saved = []
     for cat in req.categories:
@@ -368,7 +488,6 @@ async def onboard(req: OnboardRequest):
         write_category_md(cat.name, cat.description)
         saved.append({"id": cat_id, "name": cat.name, "description": cat.description})
 
-    # Rebuild service with new categories
     service = await build_service_from_db()
 
     return {
@@ -394,6 +513,7 @@ class AddCategoryRequest(BaseModel):
     user_id: str = DEFAULT_USER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
 
+
 @app.post("/admin/categories/add")
 async def add_category(req: AddCategoryRequest):
     global service
@@ -410,6 +530,7 @@ class UpdateCategoryRequest(BaseModel):
     user_id: str = DEFAULT_USER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
 
+
 @app.put("/admin/categories/{category_name}")
 async def update_category(category_name: str, req: UpdateCategoryRequest):
     global service
@@ -424,6 +545,7 @@ async def update_category(category_name: str, req: UpdateCategoryRequest):
 class DeleteCategoryRequest(BaseModel):
     user_id: str = DEFAULT_USER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+
 
 @app.delete("/admin/categories/{category_name}")
 async def delete_category(category_name: str, req: DeleteCategoryRequest):
