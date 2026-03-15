@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncpg
+import httpx
+from bs4 import BeautifulSoup
 
 from memu.app.service import MemoryService
 from memu.config.settings import (
@@ -33,7 +35,6 @@ DEFAULT_WORKSPACE_ID = "default"
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 async def get_categories_from_db(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID) -> list[dict]:
-    """Read categories from memory_categories table."""
     conn = await asyncpg.connect(DATABASE_URL)
     try:
         rows = await conn.fetch(
@@ -53,7 +54,6 @@ async def get_categories_from_db(user_id: str = DEFAULT_USER_ID, workspace_id: s
 async def upsert_category_in_db(name: str, description: str,
                                  user_id: str = DEFAULT_USER_ID,
                                  workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
-    """Insert or update a category, return its id."""
     import uuid
     conn = await asyncpg.connect(DATABASE_URL)
     try:
@@ -91,7 +91,6 @@ async def upsert_category_in_db(name: str, description: str,
 
 async def delete_category_from_db(slug: str, user_id: str = DEFAULT_USER_ID,
                                    workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
-    """Delete category by slug (name). Returns True if deleted."""
     conn = await asyncpg.connect(DATABASE_URL)
     try:
         result = await conn.execute(
@@ -186,7 +185,6 @@ def build_database_config() -> DatabaseConfig:
 
 
 async def build_service_from_db() -> MemoryService:
-    """Build MemoryService with categories loaded from DB."""
     rows = await get_categories_from_db()
     if rows:
         categories = [CategoryConfig(name=r["name"], description=r["description"]) for r in rows]
@@ -285,7 +283,6 @@ async def memorize_stream(req: MemorizeRequest):
                         "message": "Extracting and processing content..."
                     }))
 
-                    # Heartbeat task — reports every 30s while Airtop is working
                     async def heartbeat():
                         elapsed = 0
                         while True:
@@ -346,7 +343,7 @@ async def memorize_stream(req: MemorizeRequest):
 
             while True:
                 try:
-                    event, data = await asyncio.wait_for(queue.get(), timeout=900)  # 15 min max
+                    event, data = await asyncio.wait_for(queue.get(), timeout=900)
                     yield sse(event, data)
                     if event in ("done", "error"):
                         break
@@ -398,6 +395,13 @@ async def retrieve(req: RetrieveRequest):
             if desc:
                 context_parts.append(f"- {desc}")
 
+        # Extract source URLs from resources
+        source_urls = []
+        for resource in result.get("resources", []):
+            url = resource.get("url") or resource.get("resource_url", "")
+            if url and url.startswith("http"):
+                source_urls.append(url)
+
         return {
             "status": "ok",
             "query": req.query,
@@ -405,6 +409,7 @@ async def retrieve(req: RetrieveRequest):
             "items": result.get("items", []),
             "categories": result.get("categories", []),
             "resources": result.get("resources", []),
+            "source_urls": list(dict.fromkeys(source_urls)),  # deduplicated
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -464,6 +469,166 @@ async def clear_memory(req: ClearMemoryRequest):
         return {"status": "ok", "message": "Memory cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Tool 6: Deep Process URL (SSE streaming) ──────────────────────────────────
+
+class DeepProcessRequest(BaseModel):
+    url: str
+    user_id: str
+    workspace_id: Optional[str] = None
+
+
+@app.post("/tools/deep_process/stream")
+async def deep_process_stream(req: DeepProcessRequest):
+    async def event_generator():
+        try:
+            yield sse("progress", {
+                "status": "fetching",
+                "message": f"Fetching {req.url}..."
+            })
+
+            async with httpx.AsyncClient(
+                timeout=30,
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; Lumen/1.0)"}
+            ) as client:
+                response = await client.get(req.url)
+                response.raise_for_status()
+                html = response.text
+                base_url = f"{response.url.scheme}://{response.url.host}"
+
+            yield sse("progress", {
+                "status": "parsing",
+                "message": "Parsing page content..."
+            })
+
+            soup = BeautifulSoup(html, "html.parser")
+
+            # ── Extract images ────────────────────────────────────────────
+            images = []
+            seen_srcs = set()
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
+                alt = img.get("alt", "").strip()
+                if not src or src in seen_srcs:
+                    continue
+
+                # Normalize URL
+                if src.startswith("//"):
+                    src = f"https:{src}"
+                elif src.startswith("/"):
+                    src = f"{base_url}{src}"
+                elif not src.startswith("http"):
+                    continue
+
+                # Skip tiny icons/tracking pixels
+                try:
+                    width = img.get("width", "")
+                    height = img.get("height", "")
+                    if width and int(str(width).replace("px", "")) < 50:
+                        continue
+                    if height and int(str(height).replace("px", "")) < 50:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+                # Skip common icon/tracker patterns
+                skip_patterns = ["icon", "logo", "pixel", "tracker", "1x1", "spacer", "badge"]
+                if any(p in src.lower() for p in skip_patterns) and not alt:
+                    continue
+
+                seen_srcs.add(src)
+                images.append({"src": src, "alt": alt or "Image"})
+
+            yield sse("images", {
+                "status": "images_found",
+                "count": len(images),
+                "images": images[:20],
+                "message": f"Found {len(images)} images"
+            })
+
+            # ── Extract tables ────────────────────────────────────────────
+            tables = []
+            for table in soup.find_all("table"):
+                headers_row = []
+                rows = []
+
+                # Get headers from thead
+                thead = table.find("thead")
+                if thead:
+                    headers_row = [th.get_text(strip=True) for th in thead.find_all(["th", "td"])]
+
+                # Get body rows
+                tbody = table.find("tbody") or table
+                for tr in tbody.find_all("tr"):
+                    cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                    if cells and any(c for c in cells):
+                        if not headers_row and not rows:
+                            headers_row = cells
+                            continue
+                        rows.append(cells)
+
+                if not rows and not headers_row:
+                    continue
+
+                # Build markdown table
+                md_lines = []
+                if headers_row:
+                    md_lines.append("| " + " | ".join(headers_row) + " |")
+                    md_lines.append("| " + " | ".join(["---"] * len(headers_row)) + " |")
+                    for row in rows:
+                        padded = row[:len(headers_row)]
+                        while len(padded) < len(headers_row):
+                            padded.append("")
+                        md_lines.append("| " + " | ".join(padded) + " |")
+                else:
+                    for row in rows:
+                        md_lines.append("| " + " | ".join(row) + " |")
+
+                if md_lines:
+                    tables.append("\n".join(md_lines))
+
+            yield sse("tables", {
+                "status": "tables_found",
+                "count": len(tables),
+                "tables": tables[:10],
+                "message": f"Found {len(tables)} tables"
+            })
+
+            yield sse("done", {
+                "status": "ok",
+                "url": req.url,
+                "images_count": len(images),
+                "tables_count": len(tables),
+                "message": f"✅ Deep processed {req.url} — {len(images)} images, {len(tables)} tables found"
+            })
+
+        except httpx.HTTPStatusError as e:
+            yield sse("error", {
+                "status": "error",
+                "message": f"❌ HTTP {e.response.status_code} error fetching {req.url}"
+            })
+        except httpx.TimeoutException:
+            yield sse("error", {
+                "status": "error",
+                "message": f"❌ Timeout fetching {req.url}"
+            })
+        except Exception as e:
+            yield sse("error", {
+                "status": "error",
+                "message": f"❌ Failed: {str(e)}"
+            })
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 # ── Admin: Onboarding ─────────────────────────────────────────────────────────
