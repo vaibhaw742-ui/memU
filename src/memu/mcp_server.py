@@ -218,8 +218,8 @@ async def build_service_from_db() -> MemoryService:
         memorize_config=MemorizeConfig(memory_categories=categories),
         retrieve_config=RetrieveConfig(
             method="rag",
-            route_intention=True,
-            sufficiency_check=True,
+            route_intention=False,
+            sufficiency_check=False,
         ),
         category_md_output_dir=str(CATEGORIES_MD_DIR),
     )
