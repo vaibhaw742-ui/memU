@@ -105,6 +105,27 @@ async def delete_category_from_db(slug: str, user_id: str = DEFAULT_USER_ID,
         await conn.close()
 
 
+async def get_source_urls_for_items(items: list[dict]) -> list[str]:
+    """Fetch source URLs from resources table using resource_ids from items."""
+    resource_ids = list({
+        item.get("resource_id") for item in items
+        if item.get("resource_id")
+    })
+    if not resource_ids:
+        return []
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        placeholders = ", ".join(f"${i+1}" for i in range(len(resource_ids)))
+        rows = await conn.fetch(
+            f"SELECT DISTINCT url FROM learning.resources "
+            f"WHERE id IN ({placeholders}) AND url LIKE 'http%'",
+            *resource_ids
+        )
+        return [r["url"] for r in rows if r["url"]]
+    finally:
+        await conn.close()
+
+
 # ── Markdown helpers ──────────────────────────────────────────────────────────
 
 def slug(name: str) -> str:
@@ -395,12 +416,8 @@ async def retrieve(req: RetrieveRequest):
             if desc:
                 context_parts.append(f"- {desc}")
 
-        # Extract source URLs from resources
-        source_urls = []
-        for resource in result.get("resources", []):
-            url = resource.get("url") or resource.get("resource_url", "")
-            if url and url.startswith("http"):
-                source_urls.append(url)
+        # Fetch source URLs from DB using resource_ids from items
+        source_urls = await get_source_urls_for_items(result.get("items", []))
 
         return {
             "status": "ok",
@@ -409,7 +426,7 @@ async def retrieve(req: RetrieveRequest):
             "items": result.get("items", []),
             "categories": result.get("categories", []),
             "resources": result.get("resources", []),
-            "source_urls": list(dict.fromkeys(source_urls)),  # deduplicated
+            "source_urls": source_urls,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -430,7 +447,16 @@ async def list_items(req: ListItemsRequest):
             where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
         )
         items = result.get("items", [])
-        return {"status": "ok", "total": len(items), "items": items[:req.limit]}
+
+        # Fetch source URLs for all items
+        source_urls = await get_source_urls_for_items(items)
+
+        return {
+            "status": "ok",
+            "total": len(items),
+            "items": items[:req.limit],
+            "source_urls": source_urls,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -514,7 +540,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 if not src or src in seen_srcs:
                     continue
 
-                # Normalize URL
                 if src.startswith("//"):
                     src = f"https:{src}"
                 elif src.startswith("/"):
@@ -522,7 +547,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 elif not src.startswith("http"):
                     continue
 
-                # Skip tiny icons/tracking pixels
                 try:
                     width = img.get("width", "")
                     height = img.get("height", "")
@@ -533,7 +557,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 except (ValueError, TypeError):
                     pass
 
-                # Skip common icon/tracker patterns
                 skip_patterns = ["icon", "logo", "pixel", "tracker", "1x1", "spacer", "badge"]
                 if any(p in src.lower() for p in skip_patterns) and not alt:
                     continue
@@ -554,12 +577,10 @@ async def deep_process_stream(req: DeepProcessRequest):
                 headers_row = []
                 rows = []
 
-                # Get headers from thead
                 thead = table.find("thead")
                 if thead:
                     headers_row = [th.get_text(strip=True) for th in thead.find_all(["th", "td"])]
 
-                # Get body rows
                 tbody = table.find("tbody") or table
                 for tr in tbody.find_all("tr"):
                     cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
@@ -572,7 +593,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 if not rows and not headers_row:
                     continue
 
-                # Build markdown table
                 md_lines = []
                 if headers_row:
                     md_lines.append("| " + " | ".join(headers_row) + " |")
