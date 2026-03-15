@@ -217,9 +217,8 @@ async def build_service_from_db() -> MemoryService:
         database_config=build_database_config(),
         memorize_config=MemorizeConfig(memory_categories=categories),
         retrieve_config=RetrieveConfig(
-            method="rag",
-            route_intention=False,
-            sufficiency_check=False,
+            method="llm",
+            route_intention=False
         ),
         category_md_output_dir=str(CATEGORIES_MD_DIR),
     )
