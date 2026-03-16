@@ -20,6 +20,8 @@ from memu.config.settings import (
     MemorizeConfig,
     RetrieveConfig,
     CategoryConfig,
+    CustomPrompt,
+    PromptBlock,
 )
 
 app = FastAPI(title="Lumen MCP Bridge", version="0.2.0")
@@ -31,6 +33,99 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 CATEGORIES_MD_DIR = Path(os.getenv("CATEGORIES_MD_DIR", "./categories"))
 DEFAULT_USER_ID = "default"
 DEFAULT_WORKSPACE_ID = "default"
+
+# ── Category summary prompt (shared across all categories) ────────────────────
+
+CATEGORY_SUMMARY_PROMPT = CustomPrompt(
+    objective=PromptBlock(
+        ordinal=10,
+        prompt="""
+# Memory Organizer
+
+Maintain a running chronological knowledge log by appending new memory items to the existing log.
+
+## Format Requirements
+- Preserve the existing log exactly as-is
+- Append new memory items in date-wise order (newest first)
+- If a date already exists in the log, append new memory_type sections under that date
+- If a date is new, insert it in the correct chronological position
+- Group entries by date, then by memory_type within each date
+- Preserve the original index-style table structure for each memory item
+- No merging, no summarizing, no rewriting of existing content
+- Maximum {target_length} tokens
+"""
+    ),
+    workflow=PromptBlock(
+        ordinal=20,
+        prompt="""
+# Organization Process
+1. Take the existing log from original_content as the base state — output it exactly as received
+2. Parse all incoming new memory items
+3. Extract date and memory_type for each new item
+4. For each new item:
+   a. If its date already exists in the log → append the new memory_type section under that date block
+   b. If its date is new → insert a new date block in the correct chronological position (newest first)
+5. Render each new item with its date header, memory_type label, and original index-style table
+6. Do not alter, reorder, or rewrite any existing log content
+"""
+    ),
+    output=PromptBlock(
+        ordinal=50,
+        prompt="""
+# Output Format
+```markdown
+# {category} — Memory Log
+
+## [Date: YYYY-MM-DD]  ← newest date first
+
+### [Memory Type]
+
+| Index | Topic | Sub-Topic | Description |
+|-------|-------|-----------|-------------|
+| 1     | ...   | -         | ...         |
+| 1.1   | ...   | ...       | ...         |
+| 1.2   | ...   | ...       | ...         |
+| 2     | ...   | -         | ...         |
+| 2.1   | ...   | ...       | ...         |
+
+---
+
+### [Memory Type]  ← another memory_type under same date if applicable
+
+| Index | Topic | Sub-Topic | Description |
+|-------|-------|-----------|-------------|
+| ...   | ...   | ...       | ...         |
+
+---
+
+## [Date: YYYY-MM-DD]  ← older date
+
+### [Memory Type]
+
+| Index | Topic | Sub-Topic | Description |
+|-------|-------|-----------|-------------|
+| ...   | ...   | ...       | ...         |
+
+---
+```
+
+Rules:
+- ALWAYS start with the full existing log before appending anything
+- New date blocks go in the correct chronological position relative to existing dates
+- New memory_type sections under an existing date go AFTER existing sections for that date
+- Never remove or modify any existing entry
+Target length: {target_length} tokens
+"""
+    ),
+    input=PromptBlock(
+        ordinal=90,
+        prompt="""
+Category: {category}
+Existing Log (preserve as base state): {original_content}
+New Memory Items (append these): {new_memory_items_text}
+"""
+    )
+)
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -206,11 +301,25 @@ def build_database_config() -> DatabaseConfig:
 
 
 async def build_service_from_db() -> MemoryService:
+    """Build MemoryService with categories loaded from DB, shared summary prompt."""
     rows = await get_categories_from_db()
     if rows:
-        categories = [CategoryConfig(name=r["name"], description=r["description"]) for r in rows]
+        categories = [
+            CategoryConfig(
+                name=r["name"],
+                description=r["description"],
+                summary_prompt=CATEGORY_SUMMARY_PROMPT,
+            )
+            for r in rows
+        ]
     else:
-        categories = [CategoryConfig(name="general", description="General knowledge and everything else")]
+        categories = [
+            CategoryConfig(
+                name="general",
+                description="General knowledge and everything else",
+                summary_prompt=CATEGORY_SUMMARY_PROMPT,
+            )
+        ]
 
     return MemoryService(
         llm_profiles=build_llm_profiles(),
@@ -218,7 +327,7 @@ async def build_service_from_db() -> MemoryService:
         memorize_config=MemorizeConfig(memory_categories=categories),
         retrieve_config=RetrieveConfig(
             method="llm",
-            route_intention=False
+            route_intention=False,
         ),
         category_md_output_dir=str(CATEGORIES_MD_DIR),
     )
@@ -415,7 +524,6 @@ async def retrieve(req: RetrieveRequest):
             if desc:
                 context_parts.append(f"- {desc}")
 
-        # Fetch source URLs from DB using resource_ids from items
         source_urls = await get_source_urls_for_items(result.get("items", []))
 
         return {
@@ -446,8 +554,6 @@ async def list_items(req: ListItemsRequest):
             where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
         )
         items = result.get("items", [])
-
-        # Fetch source URLs for all items
         source_urls = await get_source_urls_for_items(items)
 
         return {
@@ -538,14 +644,12 @@ async def deep_process_stream(req: DeepProcessRequest):
                 alt = img.get("alt", "").strip()
                 if not src or src in seen_srcs:
                     continue
-
                 if src.startswith("//"):
                     src = f"https:{src}"
                 elif src.startswith("/"):
                     src = f"{base_url}{src}"
                 elif not src.startswith("http"):
                     continue
-
                 try:
                     width = img.get("width", "")
                     height = img.get("height", "")
@@ -555,11 +659,9 @@ async def deep_process_stream(req: DeepProcessRequest):
                         continue
                 except (ValueError, TypeError):
                     pass
-
                 skip_patterns = ["icon", "logo", "pixel", "tracker", "1x1", "spacer", "badge"]
                 if any(p in src.lower() for p in skip_patterns) and not alt:
                     continue
-
                 seen_srcs.add(src)
                 images.append({"src": src, "alt": alt or "Image"})
 
@@ -575,11 +677,9 @@ async def deep_process_stream(req: DeepProcessRequest):
             for table in soup.find_all("table"):
                 headers_row = []
                 rows = []
-
                 thead = table.find("thead")
                 if thead:
                     headers_row = [th.get_text(strip=True) for th in thead.find_all(["th", "td"])]
-
                 tbody = table.find("tbody") or table
                 for tr in tbody.find_all("tr"):
                     cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
@@ -588,10 +688,8 @@ async def deep_process_stream(req: DeepProcessRequest):
                             headers_row = cells
                             continue
                         rows.append(cells)
-
                 if not rows and not headers_row:
                     continue
-
                 md_lines = []
                 if headers_row:
                     md_lines.append("| " + " | ".join(headers_row) + " |")
@@ -604,7 +702,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 else:
                     for row in rows:
                         md_lines.append("| " + " | ".join(row) + " |")
-
                 if md_lines:
                     tables.append("\n".join(md_lines))
 
@@ -624,20 +721,11 @@ async def deep_process_stream(req: DeepProcessRequest):
             })
 
         except httpx.HTTPStatusError as e:
-            yield sse("error", {
-                "status": "error",
-                "message": f"❌ HTTP {e.response.status_code} error fetching {req.url}"
-            })
+            yield sse("error", {"status": "error", "message": f"❌ HTTP {e.response.status_code} error fetching {req.url}"})
         except httpx.TimeoutException:
-            yield sse("error", {
-                "status": "error",
-                "message": f"❌ Timeout fetching {req.url}"
-            })
+            yield sse("error", {"status": "error", "message": f"❌ Timeout fetching {req.url}"})
         except Exception as e:
-            yield sse("error", {
-                "status": "error",
-                "message": f"❌ Failed: {str(e)}"
-            })
+            yield sse("error", {"status": "error", "message": f"❌ Failed: {str(e)}"})
 
     return StreamingResponse(
         event_generator(),
@@ -671,9 +759,7 @@ async def onboard(req: OnboardRequest):
         cat_id = await upsert_category_in_db(cat.name, cat.description, req.user_id, req.workspace_id)
         write_category_md(cat.name, cat.description)
         saved.append({"id": cat_id, "name": cat.name, "description": cat.description})
-
     service = await build_service_from_db()
-
     return {
         "status": "ok",
         "message": f"Onboarded with {len(saved)} categories",
