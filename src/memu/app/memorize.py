@@ -910,39 +910,84 @@ Summary:"""
         resource_plans: list[dict[str, Any]] = []
         total_segments = len(preprocessed_resources) or 1
 
-        DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
+        # DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract it as a structured table.
+
+        #                                 YOUR TASK:
+        #                                 1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+
+        #                                 2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
+        #                                 - Each row: "topic | sub_topic | description"
+        #                                 - Capture all main knowledge areas from the document
+        #                                 - Keep descriptions concise (1-2 sentences per row)
+
+        #                                 3. Categorize the entire document based on its overall content into the available categories.
+
+        #                                 RESPONSE FORMAT (JSON):
+        #                                 {{
+        #                                     "memory_type": "2-3 word type",
+        #                                     "entries": [
+        #                                         {{
+        #                                             "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+        #                                             "categories": ["Category1", "Category2"]
+        #                                         }}
+        #                                     ]
+        #                                 }}
+
+        #                                 GUIDELINES:
+        #                                 - memory_type: Short, descriptive (2-3 words)
+        #                                 - entries: Usually contains just ONE entry representing the whole document
+        #                                 - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
+        #                                 - Capture 3-6 key topics from the document
+        #                                 - categories: Assign based on overall document content
+        #                                 - Ensure JSON is valid
+
+        #                                 Now analyze the document and provide the JSON response:"""
+
+        DEFAULT_EXTRACTION_TEMPLATE = """Analyze the following document and extract key concepts as an index-style structured table.
 
                                         YOUR TASK:
-                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes this content (e.g., "AI Knowledge", "Quantum Tech", "Business Strategy", etc.)
+                                        1. Determine a MEMORY_TYPE (2-3 words max) that best describes the primary focus or domain of this content (e.g., "Legal Contracts", "Financial Analysis", "Software Architecture", "Historical Events", "Medical Research", etc.)
 
-                                        2. Create a SINGLE table representation of this document with rows for different topics/concepts. The table should have this format:
-                                        - Each row: "topic | sub_topic | description"
-                                        - Capture all main knowledge areas from the document
-                                        - Keep descriptions concise (1-2 sentences per row)
+                                        2. Create a SINGLE index-style table that acts as a Table of Contents for the key concepts in this document:
+                                        - Think of it like a BOOK INDEX: top-level topics as chapters, sub-topics as sections within each chapter
+                                        - Each row format: "index | topic | sub_topic | description"
+                                        - index follows a hierarchical numbering: 1, 1.1, 1.2, 2, 2.1, 2.2, 2.3, 3, 3.1 ...
+                                        - Topic rows (1, 2, 3 ...) = broad concept family, description gives the overall theme
+                                        - Sub-topic rows (1.1, 1.2 ...) = specific concept within that family, description answers "why read this?"
+                                        - Focus on the core concepts, patterns, methodologies, and key decisions relevant to the document's domain
+                                        - Skip anything tangential or irrelevant to the document's primary subject matter
 
-                                        3. Categorize the entire document based on its overall content into the available categories.
+                                        INDEX STRUCTURE RULES:
+                                        - Top-level index (1, 2, 3): Represents a distinct concept family or domain within the document
+                                        - Second-level index (1.1, 1.2): Specific sub-concepts or details within that family
+                                        - A topic with only ONE sub-concept should still follow the same structure for consistency
+                                        - Keep top-level topics genuinely distinct — group related ideas, split only when clearly different
+
+                                        3. Categorize the document based on its content into the available categories.
 
                                         RESPONSE FORMAT (JSON):
                                         {{
-                                            "memory_type": "2-3 word type",
+                                            "memory_type": "2-3 word domain/focus type",
                                             "entries": [
                                                 {{
-                                                    "table": "Topic 1 | Sub-topic 1 | Description of topic 1\\nTopic 2 | Sub-topic 2 | Description of topic 2\\nTopic 3 | Sub-topic 3 | Description of topic 3",
+                                                    "table": "1 | Topic A | - | High-level theme of this concept family\\n1.1 | Topic A | Sub-topic 1 | Why this specific concept is worth reading\\n1.2 | Topic A | Sub-topic 2 | Why this specific concept is worth reading\\n2 | Topic B | - | High-level theme of this concept family\\n2.1 | Topic B | Sub-topic 1 | Why this specific concept is worth reading",
                                                     "categories": ["Category1", "Category2"]
                                                 }}
                                             ]
                                         }}
 
                                         GUIDELINES:
-                                        - memory_type: Short, descriptive (2-3 words)
-                                        - entries: Usually contains just ONE entry representing the whole document
-                                        - table: Multiple rows separated by \\n, each row is "topic | sub_topic | description"
-                                        - Capture 3-6 key topics from the document
-                                        - categories: Assign based on overall document content
+                                        - memory_type: Short, descriptive (2-3 words), reflecting the document's domain or focus
+                                        - entries: ONE entry representing the whole document
+                                        - index: Hierarchical numbering (1, 1.1, 1.2, 2, 2.1 ...) — mirrors a book index or table of contents
+                                        - Top-level topic rows use "-" as sub_topic placeholder and give an overview description
+                                        - Sub-topic rows give specific, compelling read-worthy descriptions
+                                        - Only create a new top-level topic when the concept domain is genuinely distinct
+                                        - Capture ALL relevant key concepts — do not arbitrarily limit rows
+                                        - categories: Reflect the primary domains and themes covered in the document
                                         - Ensure JSON is valid
 
-                                        Now analyze the document and provide the JSON response:"""
-
+                                        Now analyze the document and produce an index-style table of key concepts structured like a book's table of contents:"""
         extraction_template = (
         self.memorize_config.extraction_prompt_template 
         or DEFAULT_EXTRACTION_TEMPLATE)
