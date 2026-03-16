@@ -1304,9 +1304,9 @@ Summary:"""
         """
         updated_summaries: dict[str, str] = {} ### maybe validation required 
         
-        print("updates jnkjn")
-        print(updates)
-        print("jhsdbfjsdhf")
+        # print("updates jnkjn")
+        # print(updates)
+        # print("jhsdbfjsdhf")
         if not updates:
             return updated_summaries
         tasks = []
@@ -1316,6 +1316,8 @@ Summary:"""
             cat = store.memory_category_repo.categories.get(cid)
             if not cat or not memories:
                 continue
+            print("memories")
+            print(memories)
             prompt = self._build_category_summary_prompt(category=cat, new_memories=memories)
             tasks.append(client.summarize(prompt, system_prompt=None))
             target_ids.append(cid)
@@ -1323,6 +1325,8 @@ Summary:"""
             return updated_summaries
         summaries = await asyncio.gather(*tasks) ## final updated summary for each category in parallel
         for cid, summary in zip(target_ids, summaries, strict=True):
+            print("summary")
+            print(summaries)
             cat = store.memory_category_repo.categories.get(cid)
             if not cat:
                 continue
@@ -1332,9 +1336,9 @@ Summary:"""
                 summary=cleaned_summary,
             )
             updated_summaries[cid] = cleaned_summary
-        print("updated summaries dkjfbsjkhdfbv")
-        print(updated_summaries)
-        print("sjhdfbksjf")
+        # print("updated summaries dkjfbsjkhdfbv")
+        # print(updated_summaries)
+        # print("sjhdfbksjf")
         return updated_summaries
 
     def _build_category_summary_prompt(
