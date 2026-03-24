@@ -72,7 +72,7 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
-        connection.execute(text(f"SET search_path TO {SCHEMA}, public"))
+        connection.execute(text(f"SET search_path TO {SCHEMA}"))
         connection.commit()
 
         context.configure(
