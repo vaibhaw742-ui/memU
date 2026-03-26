@@ -176,15 +176,15 @@ class MemorizeMixin:
                 produces={"response"},
                 capabilities=set(),
             ),
-            # NEW: Add markdown save step
-            WorkflowStep(
-                step_id="save_categories_markdown",
-                role="save_markdown",
-                handler=self._save_categories_markdown,
-                requires={"category_updates", "ctx", "store"},
-                produces={"markdown_files_saved"},
-                capabilities=set(),
-            ),
+            # # Markdown save step — disabled
+            # WorkflowStep(
+            #     step_id="save_categories_markdown",
+            #     role="save_markdown",
+            #     handler=self._save_categories_markdown,
+            #     requires={"category_updates", "ctx", "store"},
+            #     produces={"markdown_files_saved"},
+            #     capabilities=set(),
+            # ),
         ]
         return steps
 
@@ -1295,6 +1295,15 @@ Summary:"""
                 continue
                 
             mapped_cat_ids = self._map_category_names_to_ids(cat_names, ctx)
+            if not mapped_cat_ids:
+                # LLM returned no/unrecognised categories — fall back to "general"
+                general_id = ctx.category_name_to_id.get("general")
+                if general_id:
+                    mapped_cat_ids = [general_id]
+                else:
+                    mapped_cat_ids = list(ctx.category_ids)
+            # Use only the best (first) matched category
+            mapped_cat_ids = mapped_cat_ids[:1]
             for cid in mapped_cat_ids:
                 rels.append(store.category_item_repo.link_item_category(item.id, cid, user_data=dict(user or {})))
                 # Store (item_id, summary) tuple for reference support
@@ -1376,11 +1385,16 @@ Summary:"""
             if not cat:
                 continue
             cleaned_summary = summary.replace("```markdown", "").replace("```", "").strip()
-            store.memory_category_repo.update_category(
+            updated_cat = store.memory_category_repo.update_category(
                 category_id=cid,
                 summary=cleaned_summary,
             )
             updated_summaries[cid] = cleaned_summary
+            # Keep .md file in sync with DB summary
+            try:
+                self.category_md_handler.save_category(updated_cat)
+            except Exception as e:
+                logger.error(f"[Markdown] Failed to save category '{updated_cat.name}': {e}")
         # print("updated summaries dkjfbsjkhdfbv")
         # print(updated_summaries)
         # print("sjhdfbksjf")
@@ -1444,11 +1458,13 @@ Summary:"""
         target_length = (
             category_config and category_config.target_length
         ) or self.memorize_config.default_category_summary_target_length
+        from datetime import date
         return prompt.format(
             category=self._escape_prompt_value(category.name),
             original_content=self._escape_prompt_value(original or ""),
             new_memory_items_text=self._escape_prompt_value(new_items_text or "No new memory items."),
             target_length=target_length,
+            today=date.today().isoformat(),
         )
     ## for references
     async def _persist_item_references(

@@ -76,7 +76,7 @@ Maintain a running chronological knowledge log by appending new memory items to 
 ```markdown
 # {category} — Memory Log
 
-## [Date: YYYY-MM-DD]  ← newest date first
+## {today}  ← newest date first
 
 ### [Memory Type]
 
@@ -440,18 +440,7 @@ async def memorize_stream(req: MemorizeRequest):
                         except asyncio.CancelledError:
                             pass
 
-                    await queue.put(("progress", {
-                        "step": 3,
-                        "status": "categorizing",
-                        "message": "Categorizing and saving to knowledge base..."
-                    }))
-
                     updated_categories = [c.get("name") for c in result.get("categories", [])]
-
-                    for cat in result.get("categories", []):
-                        summary = cat.get("summary") or cat.get("description", "")
-                        if summary:
-                            append_item_to_category_md(cat.get("name", ""), summary[:120])
 
                     await queue.put(("done", {
                         "status": "ok",
@@ -745,8 +734,14 @@ class CategoryPayload(BaseModel):
     description: str
 
 
+DEFAULT_CATEGORIES = [
+    CategoryPayload(name="general", description="General knowledge and everything else"),
+    CategoryPayload(name="supadense", description="Learning goals, intent, and personal growth objectives"),
+]
+
+
 class OnboardRequest(BaseModel):
-    categories: list[CategoryPayload]
+    categories: list[CategoryPayload] = []
     user_id: str = DEFAULT_USER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
 
@@ -754,8 +749,11 @@ class OnboardRequest(BaseModel):
 @app.post("/admin/onboard")
 async def onboard(req: OnboardRequest):
     global service
+    # Merge defaults with user-provided categories (dedupe by name)
+    existing_names = {c.name.lower() for c in req.categories}
+    all_categories = req.categories + [c for c in DEFAULT_CATEGORIES if c.name.lower() not in existing_names]
     saved = []
-    for cat in req.categories:
+    for cat in all_categories:
         cat_id = await upsert_category_in_db(cat.name, cat.description, req.user_id, req.workspace_id)
         write_category_md(cat.name, cat.description)
         saved.append({"id": cat_id, "name": cat.name, "description": cat.description})
@@ -839,3 +837,66 @@ async def reload_service():
         "status": "reloaded",
         "categories": [r["name"] for r in rows],
     }
+
+
+# ── Admin: Regenerate category summaries ──────────────────────────────────────
+
+@app.post("/admin/regenerate_summaries")
+async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID):
+    """Regenerate summaries for all categories from their linked memory items."""
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT mc.id AS cat_id, mc.name, mc.summary AS cat_summary,
+                   mi.id AS item_id, mi.memory_type, mi.summary AS item_summary
+            FROM learning.memory_categories mc
+            JOIN learning.category_items ci ON ci.category_id = mc.id
+            JOIN learning.memory_items mi ON mi.id = ci.item_id
+            WHERE mc.user_id = $1 AND mc.workspace_id = $2
+            ORDER BY mc.id, mi.created_at
+            """,
+            user_id, workspace_id
+        )
+    finally:
+        await conn.close()
+
+    from collections import defaultdict
+    cat_items: dict = defaultdict(list)
+    cat_meta: dict = {}
+    for row in rows:
+        cid = row["cat_id"]
+        cat_meta[cid] = {"name": row["name"], "summary": row["cat_summary"] or ""}
+        cat_items[cid].append((row["item_id"], row["memory_type"], row["item_summary"]))
+
+    if not cat_items:
+        return {"status": "ok", "message": "No category-item links found", "updated": []}
+
+    llm_client = service._get_llm_client()
+    updated = []
+    for cid, items in cat_items.items():
+        meta = cat_meta[cid]
+
+        class _Cat:
+            name = meta["name"]
+            summary = meta["summary"]
+
+        try:
+            prompt = service._build_category_summary_prompt(category=_Cat(), new_memories=items)
+            summary_text = await llm_client.summarize(prompt, system_prompt=None)
+            cleaned = summary_text.replace("```markdown", "").replace("```", "").strip()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"LLM error for category '{meta['name']}': {e}")
+
+        conn2 = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn2.execute(
+                "UPDATE learning.memory_categories SET summary=$1, updated_at=now() WHERE id=$2",
+                cleaned, cid
+            )
+        finally:
+            await conn2.close()
+
+        updated.append({"category": meta["name"], "id": cid})
+
+    return {"status": "ok", "updated": updated}

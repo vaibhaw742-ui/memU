@@ -73,7 +73,7 @@ class CategoryMarkdownHandler:
             f"- **Category ID**: `{category.id}`",
             f"- **Created**: {category.created_at.isoformat() if category.created_at else 'N/A'}",
             f"- **Last Updated**: {category.updated_at.isoformat() if category.updated_at else 'N/A'}",
-            f"- **Has Embedding**: {'Yes' if category.embedding else 'No'}",
+            f"- **Has Embedding**: {'Yes' if category.embedding is not None else 'No'}",
             "",
         ]
         
