@@ -735,7 +735,6 @@ class CategoryPayload(BaseModel):
 
 
 DEFAULT_CATEGORIES = [
-    CategoryPayload(name="general", description="General knowledge and everything else"),
     CategoryPayload(name="supadense", description="Learning goals, intent, and personal growth objectives"),
 ]
 
