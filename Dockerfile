@@ -18,10 +18,8 @@ COPY . .
 RUN rm -rf .venv
 
 # Install dependencies
-RUN uv venv && \
-    . .venv/bin/activate && \
-    uv pip install -e ".[postgres,langgraph,claude]"
+RUN uv pip install --system -e ".[postgres,langgraph,claude]"
 
 EXPOSE 8000
 
-CMD ["/bin/sh", "-c", ". .venv/bin/activate && alembic upgrade head && uvicorn src.memu.main:app --host 0.0.0.0 --port 8000"]
+CMD ["/bin/sh", "-c", "alembic upgrade head && uvicorn src.memu.main:app --host 0.0.0.0 --port 8000"]

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import asyncpg
 import httpx
 from bs4 import BeautifulSoup
+import frontmatter as fm
 
 from memu.app.service import MemoryService
 from memu.config.settings import (
@@ -31,6 +32,7 @@ app = FastAPI(title="Lumen MCP Bridge", version="0.2.0")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/memu")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 CATEGORIES_MD_DIR = Path(os.getenv("CATEGORIES_MD_DIR", "./categories"))
+SUPADENSE_PATH = Path(os.getenv("SUPADENSE_PATH", "./openclaw_learning/workspace/supadense.md"))
 DEFAULT_USER_ID = "default"
 DEFAULT_WORKSPACE_ID = "default"
 
@@ -324,7 +326,10 @@ async def build_service_from_db() -> MemoryService:
     return MemoryService(
         llm_profiles=build_llm_profiles(),
         database_config=build_database_config(),
-        memorize_config=MemorizeConfig(memory_categories=categories),
+        memorize_config=MemorizeConfig(
+            memory_categories=categories,
+            enable_item_reinforcement=True,
+        ),
         retrieve_config=RetrieveConfig(
             method="llm",
             route_intention=False,
@@ -817,6 +822,8 @@ class DeleteCategoryRequest(BaseModel):
 @app.delete("/admin/categories/{category_name}")
 async def delete_category(category_name: str, req: DeleteCategoryRequest):
     global service
+    if category_name.lower() in ("supadense", "supadense.md"):
+        raise HTTPException(status_code=400, detail="supadense.md is protected and cannot be deleted.")
     deleted = await delete_category_from_db(category_name, req.user_id, req.workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Category '{category_name}' not found")
@@ -899,3 +906,111 @@ async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str
         updated.append({"category": meta["name"], "id": cid})
 
     return {"status": "ok", "updated": updated}
+
+# ── supadense helpers ─────────────────────────────────────────────────────────
+
+def _parse_bullet_list(text: str) -> list[str]:
+    items = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("- ") or line.startswith("* "):
+            items.append(line[2:].strip())
+    return [i for i in items if i]
+
+
+def _parse_key_value(text: str) -> dict:
+    result = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def _parse_supadense() -> dict:
+    if not SUPADENSE_PATH.exists():
+        return {"error": f"supadense.md not found at {SUPADENSE_PATH}"}
+    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+    post = fm.loads(raw)
+    sections: dict[str, str] = {}
+    current_key = None
+    current_lines: list[str] = []
+    for line in post.content.splitlines():
+        if line.startswith("## "):
+            if current_key is not None:
+                sections[current_key] = "\n".join(current_lines).strip()
+            current_key = line[3:].strip().lower().replace(" ", "_")
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_key is not None:
+        sections[current_key] = "\n".join(current_lines).strip()
+    return {
+        "meta": dict(post.metadata),
+        "goals": _parse_bullet_list(sections.get("goals", "")),
+        "gaps": _parse_bullet_list(sections.get("gaps", "")),
+        "learning_intent": sections.get("learning_intent", "").strip(),
+        "trusted_sources": _parse_bullet_list(sections.get("trusted_sources", "")),
+        "depth_preferences": _parse_key_value(sections.get("depth_preferences", "")),
+        "scout_config": post.metadata.get("scout_config", {}),
+        "last_synthesis_at": post.metadata.get("last_synthesis_at"),
+    }
+
+
+def _update_supadense_meta(key: str, value) -> None:
+    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+    post = fm.loads(raw)
+    post.metadata[key] = value
+    SUPADENSE_PATH.write_text(fm.dumps(post), encoding="utf-8")
+
+
+def _append_to_supadense_section(section_title: str, new_items: list[str]) -> None:
+    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    target = f"## {section_title}"
+    section_start = None
+    section_end = len(lines)
+    for i, line in enumerate(lines):
+        if line.strip() == target:
+            section_start = i
+        elif section_start is not None and line.startswith("## "):
+            section_end = i
+            break
+    if section_start is None:
+        lines.append("")
+        lines.append(target)
+        for item in new_items:
+            lines.append(f"- {item}")
+    else:
+        for item in reversed(new_items):
+            lines.insert(section_end, f"- {item}")
+    SUPADENSE_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
+# ── supadense endpoints ───────────────────────────────────────────────────────
+
+@app.get("/tools/supadense/read")
+async def supadense_read():
+    try:
+        return {"status": "ok", "data": _parse_supadense()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateGoalsRequest(BaseModel):
+    goals: list[str]
+    user_id: str = DEFAULT_USER_ID
+
+
+@app.post("/tools/supadense/update_goals")
+async def supadense_update_goals(req: UpdateGoalsRequest):
+    try:
+        _append_to_supadense_section("Goals", req.goals)
+        return {
+            "status": "ok",
+            "added": req.goals,
+            "message": f"Added {len(req.goals)} goal(s) to supadense.md",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
