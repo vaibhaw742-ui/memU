@@ -1317,6 +1317,148 @@ Return ONLY a valid JSON array, no other text. Example:
     return scored_items
 
 
+async def _get_existing_items_by_category(
+    user_id: str, workspace_id: str, since: None, categories: list[str]
+) -> dict[str, list[str]]:
+    """Fetch already-synthesized items grouped by category for novelty comparison."""
+    if not categories:
+        return {}
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        if since:
+            rows = await conn.fetch(
+                """
+                SELECT mi.summary, mc.name as category
+                FROM learning.memory_items mi
+                JOIN learning.category_items ci ON ci.item_id = mi.id
+                JOIN learning.memory_categories mc ON mc.id = ci.category_id
+                WHERE mi.user_id = $1 AND mi.workspace_id = $2
+                AND mi.created_at <= $3
+                ORDER BY mc.name, mi.created_at DESC
+                LIMIT 100
+                """,
+                user_id, workspace_id, since
+            )
+        else:
+            # No last_synthesis_at means this is first synthesis — no existing items
+            return {}
+        by_cat: dict[str, list[str]] = {}
+        for row in rows:
+            cat = row["category"] or "general"
+            if cat not in by_cat:
+                by_cat[cat] = []
+            by_cat[cat].append((row["summary"] or "")[:300])
+        return by_cat
+    finally:
+        await conn.close()
+
+
+def _parse_topic_rows(summary: str) -> list[dict]:
+    """Parse memory item summary into structured topic rows.
+    Format: index | topic | sub-topic | description
+    """
+    rows = []
+    for line in summary.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            rows.append({
+                "index": parts[0] if len(parts) > 0 else "",
+                "topic": parts[1] if len(parts) > 1 else "",
+                "subtopic": parts[2] if len(parts) > 2 else "",
+                "description": parts[3] if len(parts) > 3 else "",
+            })
+    return rows
+
+
+def _make_topic_key(topic: str, subtopic: str) -> str:
+    """Normalize topic+subtopic into a comparable key."""
+    t = re.sub(r"\s+", " ", topic.lower().strip())
+    s = re.sub(r"\s+", " ", subtopic.lower().strip())
+    return f"{t}||{s}"
+
+
+def _diff_topics(
+    new_items_by_category: dict[str, list[dict]],
+    existing_by_category: dict[str, list[str]],
+) -> dict[str, dict]:
+    """
+    Exact topic-level diff — compares new memory item rows against existing KB rows.
+    Deterministic — no LLM needed. Parses index|topic|subtopic|description format.
+    Returns per category: novel_topics, reinforced_topics, novelty_score.
+    """
+    result = {}
+
+    for cat, new_items in new_items_by_category.items():
+        existing_summaries = existing_by_category.get(cat, [])
+
+        # Build existing topic key set from all previously synthesized items
+        existing_keys: set[str] = set()
+        for summary in existing_summaries:
+            for row in _parse_topic_rows(summary):
+                if row["topic"] and row["topic"] != "-":
+                    existing_keys.add(_make_topic_key(row["topic"], row["subtopic"]))
+
+        novel_topics = []
+        reinforced_topics = []
+        all_new_rows = []
+
+        for item in new_items:
+            summary = item.get("summary") or ""
+            for row in _parse_topic_rows(summary):
+                if not row["topic"] or row["topic"] == "-":
+                    continue
+                all_new_rows.append(row)
+                key = _make_topic_key(row["topic"], row["subtopic"])
+                subtopic_display = f" → {row['subtopic']}" if row["subtopic"] and row["subtopic"] != "-" else ""
+                display = f"{row['topic']}{subtopic_display}"
+                entry = {
+                    "topic": row["topic"],
+                    "subtopic": row["subtopic"] if row["subtopic"] != "-" else "",
+                    "description": row["description"],
+                    "display": display,
+                }
+                if key not in existing_keys:
+                    novel_topics.append(entry)
+                else:
+                    reinforced_topics.append(entry)
+
+        # Deduplicate by key
+        seen: set[str] = set()
+        deduped_novel = []
+        for t in novel_topics:
+            k = _make_topic_key(t["topic"], t["subtopic"])
+            if k not in seen:
+                seen.add(k)
+                deduped_novel.append(t)
+
+        seen = set()
+        deduped_reinforced = []
+        for t in reinforced_topics:
+            k = _make_topic_key(t["topic"], t["subtopic"])
+            if k not in seen:
+                seen.add(k)
+                deduped_reinforced.append(t)
+
+        total = len(all_new_rows)
+        novel_count = len(deduped_novel)
+        novelty_score = round(novel_count / total, 2) if total > 0 else 0.0
+
+        result[cat] = {
+            "novel_topics": deduped_novel,
+            "reinforced_topics": deduped_reinforced,
+            "novelty_score": novelty_score,
+            "total_new_rows": total,
+            "novel_count": novel_count,
+            "reinforced_count": len(deduped_reinforced),
+            "summary": f"{novel_count} new topics, {len(deduped_reinforced)} reinforced out of {total} total rows",
+        }
+
+    return result
+
+
 async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual") -> dict:
     from datetime import datetime, timezone, date
 
@@ -1376,10 +1518,23 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
             by_category[cat] = []
         by_category[cat].append(item)
 
+    # Fetch existing KB items for novelty comparison
+    existing_by_category = await _get_existing_items_by_category(
+        user_id, workspace_id, since=last_synthesis_at, categories=list(by_category.keys())
+    )
+
+    # Run exact topic-level diff (deterministic, no LLM)
+    novelty = _diff_topics(by_category, existing_by_category)
+
     items_text = ""
     for cat, cat_items in by_category.items():
         depth_target = merged_depth_prefs.get(cat, "working")
-        items_text += f"\n### {cat} (depth target: {depth_target})\n"
+        cat_novelty = novelty.get(cat, {})
+        novelty_score = cat_novelty.get("novelty_score", 0.0)
+        novelty_summary = cat_novelty.get("summary", "")
+        items_text += f"\n### {cat} (depth: {depth_target} | novelty: {novelty_score:.0%})\n"
+        if novelty_summary:
+            items_text += f"*{novelty_summary}*\n"
         for item in cat_items[:8]:
             score = item["relevance_score"]
             matched_goal = item.get("matched_goal") or "general learning"
@@ -1388,9 +1543,28 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
             summary_snippet = (item.get("summary") or "")[:300]
             gap_note = f" | fills gap: {fills_gap}" if fills_gap else ""
             items_text += (
-                f"- [score={score}] {trusted}goal: {matched_goal}{gap_note}\n"
+                f"- [relevance={score}] {trusted}goal: {matched_goal}{gap_note}\n"
                 f"  {summary_snippet}\n"
             )
+
+    # Build exact novelty section for prompt — topic/subtopic level
+    novelty_text = ""
+    for cat, n in novelty.items():
+        novel_topics = n.get("novel_topics", [])
+        reinforced = n.get("reinforced_topics", [])
+        novelty_score = n.get("novelty_score", 0.0)
+        novelty_text += f"\n**{cat}** (novelty: {novelty_score:.0%} — {n.get('novel_count', 0)} new, {n.get('reinforced_count', 0)} reinforced)\n"
+        if novel_topics:
+            novelty_text += "Genuinely new topics not previously in KB:\n"
+            for t in novel_topics[:20]:
+                desc = f" — {t['description'][:80]}" if t.get("description") else ""
+                novelty_text += f"  + {t['display']}{desc}\n"
+        else:
+            novelty_text += "  (no novel topics — all content already in KB)\n"
+        if reinforced:
+            novelty_text += "Already in KB (reinforced by this source):\n"
+            for t in reinforced[:10]:
+                novelty_text += f"  = {t['display']}\n"
 
     depth_instructions = ""
     for cat, depth in merged_depth_prefs.items():
@@ -1422,26 +1596,31 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
 ## Relevant new knowledge ({len(relevant_items)} items scored by relevance to your goals)
 {items_text}
 
+## Knowledge delta (what's new vs already in KB)
+{novelty_text or "First synthesis — no existing KB to compare against."}
+
 ## Instructions
 Write a targeted digest with these sections:
 
-**What you learned — mapped to your goals**
-For each significant item, state:
-- Which goal it advances
-- The key insight at the correct depth (deep/working/surface per category)
-- If it fills a gap, say so explicitly
-- If from a trusted source, highlight it
+**What's genuinely new in your KB**
+Only cover concepts flagged as novel above. Be specific — name the concept, explain it at the correct depth, and say which goal it advances. Skip anything that's pure reinforcement here.
+
+**What this reinforces**
+Brief — list concepts this new content confirms you already knew. 2-3 bullets max.
+
+**What this updates**
+If any new content corrects or deepens prior understanding, call it out explicitly.
 
 **Connections**
-How does this new knowledge connect to what you already know or to other items in this digest?
+How does this new knowledge connect to your goals or other things you know?
 
 **Gaps this surfaces**
-What do you still not know after learning this? Be specific.
+What do you still not know? Be specific.
 
 **Suggested next**
-1-2 specific topics or types of content to seek out next, tied directly to your goals and remaining gaps.
+1-2 specific topics to seek out next, tied to your goals and remaining gaps.
 
-Be direct, dense, and personal. Talk to the learner as "you". Max 500 words."""
+Be direct, dense, and personal. Talk to the learner as "you". Max 600 words."""
 
     digest_text = await _llm_call(prompt, max_tokens=1000, temperature=0.7)
 
@@ -1450,16 +1629,19 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 500 words."""
 
     # Build resources table
     resources_table = "\n\n---\n\n## Knowledge sources\n\n"
-    resources_table += "| # | Category | Score | Matched goal | Fills gap | Trusted |\n"
-    resources_table += "|---|----------|-------|-------------|-----------|--------|\n"
+    resources_table += "| # | Category | Relevance | Novelty | Matched goal | Fills gap | Trusted |\n"
+    resources_table += "|---|----------|-----------|---------|-------------|-----------|--------|\n"
     for idx, item in enumerate(scored_items, 1):
         cat = item.get("category") or "general"
         score = item["relevance_score"]
+        cat_novelty = novelty.get(cat, {})
+        novelty_score = cat_novelty.get("novelty_score", "-")
+        novelty_pct = f"{novelty_score:.0%}" if isinstance(novelty_score, float) else "-"
         matched_goal = (item.get("matched_goal") or "-")[:50]
         fills_gap = (item.get("fills_gap") or "-")[:50]
         trusted = "yes" if item.get("trusted_source_boost") else "-"
         filtered_note = " *(filtered)*" if item["relevance_score"] < 0.4 else ""
-        resources_table += f"| {idx} | {cat} | {score} | {matched_goal} | {fills_gap} | {trusted} |{filtered_note}\n"
+        resources_table += f"| {idx} | {cat} | {score} | {novelty_pct} | {matched_goal} | {fills_gap} | {trusted} |{filtered_note}\n"
 
     digest_dir = SUPADENSE_PATH.parent / "digests"
     digest_dir.mkdir(parents=True, exist_ok=True)
@@ -1482,6 +1664,18 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 500 words."""
         "digest": digest_text + resources_table,
         "digest_file": str(digest_file),
         "last_synthesis_at": datetime.now(timezone.utc).isoformat(),
+        "novelty": {
+            cat: {
+                "novelty_score": n.get("novelty_score", 0.0),
+                "novel_topics": n.get("novel_topics", []),
+                "reinforced_topics": n.get("reinforced_topics", []),
+                "novel_count": n.get("novel_count", 0),
+                "reinforced_count": n.get("reinforced_count", 0),
+                "total_new_rows": n.get("total_new_rows", 0),
+                "summary": n.get("summary", ""),
+            }
+            for cat, n in novelty.items()
+        },
         "relevance_scores": [
             {
                 "category": i.get("category"),
