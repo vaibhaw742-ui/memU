@@ -36,7 +36,7 @@ SUPADENSE_PATH = Path(os.getenv("SUPADENSE_PATH", "./openclaw_learning/workspace
 DEFAULT_USER_ID = "default"
 DEFAULT_WORKSPACE_ID = "default"
 
-# ── Category summary prompt (shared across all categories) ────────────────────
+# ── Category summary prompt ───────────────────────────────────────────────────
 
 CATEGORY_SUMMARY_PROMPT = CustomPrompt(
     objective=PromptBlock(
@@ -78,7 +78,7 @@ Maintain a running chronological knowledge log by appending new memory items to 
 ```markdown
 # {category} — Memory Log
 
-## {today}  ← newest date first
+## {today}  <- newest date first
 
 ### [Memory Type]
 
@@ -86,27 +86,6 @@ Maintain a running chronological knowledge log by appending new memory items to 
 |-------|-------|-----------|-------------|
 | 1     | ...   | -         | ...         |
 | 1.1   | ...   | ...       | ...         |
-| 1.2   | ...   | ...       | ...         |
-| 2     | ...   | -         | ...         |
-| 2.1   | ...   | ...       | ...         |
-
----
-
-### [Memory Type]  ← another memory_type under same date if applicable
-
-| Index | Topic | Sub-Topic | Description |
-|-------|-------|-----------|-------------|
-| ...   | ...   | ...       | ...         |
-
----
-
-## [Date: YYYY-MM-DD]  ← older date
-
-### [Memory Type]
-
-| Index | Topic | Sub-Topic | Description |
-|-------|-------|-----------|-------------|
-| ...   | ...   | ...       | ...         |
 
 ---
 ```
@@ -114,7 +93,6 @@ Maintain a running chronological knowledge log by appending new memory items to 
 Rules:
 - ALWAYS start with the full existing log before appending anything
 - New date blocks go in the correct chronological position relative to existing dates
-- New memory_type sections under an existing date go AFTER existing sections for that date
 - Never remove or modify any existing entry
 Target length: {target_length} tokens
 """
@@ -203,7 +181,6 @@ async def delete_category_from_db(slug: str, user_id: str = DEFAULT_USER_ID,
 
 
 async def get_source_urls_for_items(items: list[dict]) -> list[str]:
-    """Fetch source URLs from resources table using resource_ids from items."""
     resource_ids = list({
         item.get("resource_id") for item in items
         if item.get("resource_id")
@@ -303,7 +280,6 @@ def build_database_config() -> DatabaseConfig:
 
 
 async def build_service_from_db() -> MemoryService:
-    """Build MemoryService with categories loaded from DB, shared summary prompt."""
     rows = await get_categories_from_db()
     if rows:
         categories = [
@@ -373,7 +349,6 @@ class MemorizeRequest(BaseModel):
 async def memorize(req: MemorizeRequest):
     try:
         workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
-        # URL dedup check
         conn = await asyncpg.connect(DATABASE_URL)
         try:
             existing = await conn.fetchrow(
@@ -417,7 +392,6 @@ async def memorize_stream(req: MemorizeRequest):
     async def event_generator():
         try:
             workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
-            # URL dedup check
             conn = await asyncpg.connect(DATABASE_URL)
             try:
                 existing = await conn.fetchrow(
@@ -431,7 +405,7 @@ async def memorize_stream(req: MemorizeRequest):
                     "status": "skipped",
                     "reason": "already_memorized",
                     "url": req.url,
-                    "message": f"⚠️ URL already in knowledge base.",
+                    "message": "URL already in knowledge base.",
                 })
                 return
 
@@ -487,13 +461,13 @@ async def memorize_stream(req: MemorizeRequest):
                         "url": req.url,
                         "items_extracted": len(result.get("items", [])),
                         "categories": updated_categories,
-                        "message": f"✅ Saved to: {', '.join(updated_categories)}" if updated_categories else "✅ Saved to knowledge base"
+                        "message": f"Saved to: {', '.join(updated_categories)}" if updated_categories else "Saved to knowledge base"
                     }))
 
                 except Exception as e:
                     await queue.put(("error", {
                         "status": "error",
-                        "message": f"❌ Failed: {str(e)}"
+                        "message": f"Failed: {str(e)}"
                     }))
 
             task = asyncio.create_task(run_memorize())
@@ -507,7 +481,7 @@ async def memorize_stream(req: MemorizeRequest):
                 except asyncio.TimeoutError:
                     yield sse("error", {
                         "status": "error",
-                        "message": "❌ Timeout: memorize did not complete within 15 minutes"
+                        "message": "Timeout: memorize did not complete within 15 minutes"
                     })
                     break
 
@@ -583,7 +557,6 @@ async def list_items(req: ListItemsRequest):
         )
         items = result.get("items", [])
         source_urls = await get_source_urls_for_items(items)
-
         return {
             "status": "ok",
             "total": len(items),
@@ -664,7 +637,6 @@ async def deep_process_stream(req: DeepProcessRequest):
 
             soup = BeautifulSoup(html, "html.parser")
 
-            # ── Extract images ────────────────────────────────────────────
             images = []
             seen_srcs = set()
             for img in soup.find_all("img"):
@@ -700,7 +672,6 @@ async def deep_process_stream(req: DeepProcessRequest):
                 "message": f"Found {len(images)} images"
             })
 
-            # ── Extract tables ────────────────────────────────────────────
             tables = []
             for table in soup.find_all("table"):
                 headers_row = []
@@ -745,15 +716,15 @@ async def deep_process_stream(req: DeepProcessRequest):
                 "url": req.url,
                 "images_count": len(images),
                 "tables_count": len(tables),
-                "message": f"✅ Deep processed {req.url} — {len(images)} images, {len(tables)} tables found"
+                "message": f"Deep processed {req.url} — {len(images)} images, {len(tables)} tables found"
             })
 
         except httpx.HTTPStatusError as e:
-            yield sse("error", {"status": "error", "message": f"❌ HTTP {e.response.status_code} error fetching {req.url}"})
+            yield sse("error", {"status": "error", "message": f"HTTP {e.response.status_code} error fetching {req.url}"})
         except httpx.TimeoutException:
-            yield sse("error", {"status": "error", "message": f"❌ Timeout fetching {req.url}"})
+            yield sse("error", {"status": "error", "message": f"Timeout fetching {req.url}"})
         except Exception as e:
-            yield sse("error", {"status": "error", "message": f"❌ Failed: {str(e)}"})
+            yield sse("error", {"status": "error", "message": f"Failed: {str(e)}"})
 
     return StreamingResponse(
         event_generator(),
@@ -880,7 +851,6 @@ async def reload_service():
 
 @app.post("/admin/regenerate_summaries")
 async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID):
-    """Regenerate summaries for all categories from their linked memory items."""
     conn = await asyncpg.connect(DATABASE_URL)
     try:
         rows = await conn.fetch(
@@ -1075,7 +1045,6 @@ async def get_or_create_learning_profile(user_id: str, workspace_id: str) -> dic
             """,
             new_id, user_id, workspace_id
         )
-        # Re-fetch in case another request inserted first
         row = await conn.fetchrow(
             """
             SELECT id, user_id, workspace_id, onboarded_at,
@@ -1125,7 +1094,6 @@ class OnboardingCompleteRequest(BaseModel):
 async def onboarding_complete(req: OnboardingCompleteRequest):
     from datetime import datetime, timezone
 
-    # 1. Write supadense.md from scratch with all answers
     SUPADENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     goals_lines = "\n".join(f"- {g}" for g in req.goals)
@@ -1162,7 +1130,6 @@ scout_config:
 """
     SUPADENSE_PATH.write_text(supadense_content, encoding="utf-8")
 
-    # 2. Write depth_prefs + mark onboarded_at in learning_profiles
     profile = await get_or_create_learning_profile(req.user_id, req.workspace_id)
     conn = await asyncpg.connect(DATABASE_URL)
     try:
@@ -1179,7 +1146,6 @@ scout_config:
     finally:
         await conn.close()
 
-    # 3. Set up user-defined KB categories
     global service
     existing = await get_categories_from_db(req.user_id, req.workspace_id)
     if not existing:
@@ -1202,3 +1168,345 @@ scout_config:
         "scout_platforms": req.scout_platforms,
         "categories_created": [c["name"] for c in req.categories],
     }
+
+
+# ── Synthesis helpers ─────────────────────────────────────────────────────────
+
+async def _get_items_since(user_id: str, workspace_id: str, since=None) -> list[dict]:
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        if since:
+            rows = await conn.fetch(
+                """
+                SELECT mi.id, mi.memory_type, mi.summary, mc.name as category, mi.created_at
+                FROM learning.memory_items mi
+                LEFT JOIN learning.category_items ci ON ci.item_id = mi.id
+                LEFT JOIN learning.memory_categories mc ON mc.id = ci.category_id
+                WHERE mi.user_id = $1 AND mi.workspace_id = $2
+                AND mi.created_at > $3
+                ORDER BY mi.created_at DESC
+                """,
+                user_id, workspace_id, since
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT mi.id, mi.memory_type, mi.summary, mc.name as category, mi.created_at
+                FROM learning.memory_items mi
+                LEFT JOIN learning.category_items ci ON ci.item_id = mi.id
+                LEFT JOIN learning.memory_categories mc ON mc.id = ci.category_id
+                WHERE mi.user_id = $1 AND mi.workspace_id = $2
+                ORDER BY mi.created_at DESC
+                LIMIT 50
+                """,
+                user_id, workspace_id
+            )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def _update_last_synthesis(user_id: str, workspace_id: str, item_ids: list[str]):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        await conn.execute(
+            """
+            UPDATE learning.learning_profiles
+            SET last_synthesis_at = $1, last_digest_item_ids = $2, updated_at = now()
+            WHERE user_id = $3 AND workspace_id = $4
+            """,
+            now, json.dumps(item_ids), user_id, workspace_id
+        )
+    finally:
+        await conn.close()
+    if SUPADENSE_PATH.exists():
+        _update_supadense_meta("last_synthesis_at", now.isoformat())
+
+
+async def _llm_call(prompt: str, max_tokens: int = 800, temperature: float = 0.7) -> str:
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+
+
+async def _score_items_relevance(
+    items: list[dict],
+    goals: list[str],
+    learning_intent: str,
+    gaps: list[str],
+    trusted_sources: list[str],
+) -> list[dict]:
+    if not items:
+        return []
+
+    goals_text = "\n".join(f"- {g}" for g in goals)
+    gaps_text = "\n".join(f"- {g}" for g in gaps)
+    sources_lower = [s.lower() for s in trusted_sources]
+
+    items_for_scoring = []
+    for i, item in enumerate(items):
+        summary_snippet = (item.get("summary") or "")[:200]
+        items_for_scoring.append(f"[{i}] category={item.get('category','?')} | {summary_snippet}")
+
+    items_text = "\n".join(items_for_scoring)
+
+    scoring_prompt = f"""You are a learning relevance scorer. Score each knowledge item for relevance to the learner's goals.
+
+## Learner Goals
+{goals_text}
+
+## Learner Gaps
+{gaps_text}
+
+## Learning Intent
+{learning_intent}
+
+## Items to score (format: [index] category | summary)
+{items_text}
+
+## Instructions
+For each item return a JSON array. Each element must have:
+- "index": the item index number
+- "score": float 0.0-1.0 (1.0 = directly advances a goal or fills a gap, 0.0 = completely irrelevant)
+- "matched_goal": which goal it advances (exact string from goals list, or null)
+- "fills_gap": which gap it addresses (exact string from gaps list, or null)
+
+Return ONLY a valid JSON array, no other text. Example:
+[{{"index": 0, "score": 0.85, "matched_goal": "Master agentic AI system design", "fills_gap": null}}]"""
+
+    try:
+        raw = await _llm_call(scoring_prompt, max_tokens=500, temperature=0.1)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        scores = json.loads(raw)
+        score_map = {s["index"]: s for s in scores}
+    except Exception:
+        return [{**item, "relevance_score": 0.5, "matched_goal": None,
+                 "fills_gap": None, "trusted_source_boost": False} for item in items]
+
+    scored_items = []
+    for i, item in enumerate(items):
+        score_data = score_map.get(i, {"score": 0.3, "matched_goal": None, "fills_gap": None})
+        base_score = float(score_data.get("score", 0.3))
+        summary_lower = (item.get("summary") or "").lower()
+        is_trusted = any(src in summary_lower for src in sources_lower)
+        final_score = min(1.0, base_score + 0.15) if is_trusted else base_score
+        scored_items.append({
+            **item,
+            "relevance_score": round(final_score, 3),
+            "matched_goal": score_data.get("matched_goal"),
+            "fills_gap": score_data.get("fills_gap"),
+            "trusted_source_boost": is_trusted,
+        })
+
+    scored_items.sort(key=lambda x: x["relevance_score"], reverse=True)
+    return scored_items
+
+
+async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual") -> dict:
+    from datetime import datetime, timezone, date
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT last_synthesis_at, depth_prefs
+            FROM learning.learning_profiles
+            WHERE user_id = $1 AND workspace_id = $2
+            """,
+            user_id, workspace_id
+        )
+    finally:
+        await conn.close()
+
+    last_synthesis_at = row["last_synthesis_at"] if row else None
+    depth_prefs_raw = row["depth_prefs"] if row else {}
+    if isinstance(depth_prefs_raw, str):
+        try:
+            depth_prefs = json.loads(depth_prefs_raw)
+        except Exception:
+            depth_prefs = {}
+    else:
+        depth_prefs = depth_prefs_raw or {}
+
+    items = await _get_items_since(user_id, workspace_id, since=last_synthesis_at)
+
+    if not items:
+        return {
+            "status": "skipped",
+            "reason": "no_new_items",
+            "message": "No new items since last synthesis.",
+            "trigger": trigger,
+        }
+
+    supadense = _parse_supadense()
+    goals = supadense.get("goals", [])
+    learning_intent = supadense.get("learning_intent", "")
+    gaps = supadense.get("gaps", [])
+    trusted_sources = supadense.get("trusted_sources", [])
+    supadense_depth_prefs = supadense.get("depth_preferences", {})
+    merged_depth_prefs = {**supadense_depth_prefs, **depth_prefs}
+
+    scored_items = await _score_items_relevance(
+        items, goals, learning_intent, gaps, trusted_sources
+    )
+
+    relevant_items = [i for i in scored_items if i["relevance_score"] >= 0.4]
+    if len(relevant_items) < 3:
+        relevant_items = scored_items[:3]
+
+    by_category: dict = {}
+    for item in relevant_items:
+        cat = item.get("category") or "general"
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(item)
+
+    items_text = ""
+    for cat, cat_items in by_category.items():
+        depth_target = merged_depth_prefs.get(cat, "working")
+        items_text += f"\n### {cat} (depth target: {depth_target})\n"
+        for item in cat_items[:8]:
+            score = item["relevance_score"]
+            matched_goal = item.get("matched_goal") or "general learning"
+            fills_gap = item.get("fills_gap")
+            trusted = "TRUSTED SOURCE " if item.get("trusted_source_boost") else ""
+            summary_snippet = (item.get("summary") or "")[:300]
+            gap_note = f" | fills gap: {fills_gap}" if fills_gap else ""
+            items_text += (
+                f"- [score={score}] {trusted}goal: {matched_goal}{gap_note}\n"
+                f"  {summary_snippet}\n"
+            )
+
+    depth_instructions = ""
+    for cat, depth in merged_depth_prefs.items():
+        if depth == "deep":
+            depth_instructions += f"- {cat}: go deep — explain internals, surface open questions, connect to other concepts\n"
+        elif depth == "working":
+            depth_instructions += f"- {cat}: practical focus — key takeaways and how to apply\n"
+        else:
+            depth_instructions += f"- {cat}: surface awareness only — one-liner summary\n"
+
+    goals_text = "\n".join(f"- {g}" for g in goals)
+    gaps_text = "\n".join(f"- {g}" for g in gaps)
+
+    prompt = f"""You are Lumen, a personal learning agent. Generate a targeted, personalised learning digest.
+
+## Learner Profile
+**Goals:**
+{goals_text}
+
+**Gaps:**
+{gaps_text}
+
+**Learning Intent:**
+{learning_intent}
+
+**Depth instructions per category:**
+{depth_instructions or "- default: working depth for all categories"}
+
+## Relevant new knowledge ({len(relevant_items)} items scored by relevance to your goals)
+{items_text}
+
+## Instructions
+Write a targeted digest with these sections:
+
+**What you learned — mapped to your goals**
+For each significant item, state:
+- Which goal it advances
+- The key insight at the correct depth (deep/working/surface per category)
+- If it fills a gap, say so explicitly
+- If from a trusted source, highlight it
+
+**Connections**
+How does this new knowledge connect to what you already know or to other items in this digest?
+
+**Gaps this surfaces**
+What do you still not know after learning this? Be specific.
+
+**Suggested next**
+1-2 specific topics or types of content to seek out next, tied directly to your goals and remaining gaps.
+
+Be direct, dense, and personal. Talk to the learner as "you". Max 500 words."""
+
+    digest_text = await _llm_call(prompt, max_tokens=1000, temperature=0.7)
+
+    item_ids = [item["id"] for item in items]
+    await _update_last_synthesis(user_id, workspace_id, item_ids)
+
+    # Build resources table
+    resources_table = "\n\n---\n\n## Knowledge sources\n\n"
+    resources_table += "| # | Category | Score | Matched goal | Fills gap | Trusted |\n"
+    resources_table += "|---|----------|-------|-------------|-----------|--------|\n"
+    for idx, item in enumerate(scored_items, 1):
+        cat = item.get("category") or "general"
+        score = item["relevance_score"]
+        matched_goal = (item.get("matched_goal") or "-")[:50]
+        fills_gap = (item.get("fills_gap") or "-")[:50]
+        trusted = "yes" if item.get("trusted_source_boost") else "-"
+        filtered_note = " *(filtered)*" if item["relevance_score"] < 0.4 else ""
+        resources_table += f"| {idx} | {cat} | {score} | {matched_goal} | {fills_gap} | {trusted} |{filtered_note}\n"
+
+    digest_dir = SUPADENSE_PATH.parent / "digests"
+    digest_dir.mkdir(parents=True, exist_ok=True)
+    digest_file = digest_dir / f"{date.today().isoformat()}.md"
+    digest_file.write_text(
+        f"# Lumen Digest — {date.today().isoformat()}\n\n"
+        f"*Trigger: {trigger} | Items synthesized: {len(relevant_items)} / {len(items)} total*\n\n"
+        f"{digest_text}"
+        f"{resources_table}\n",
+        encoding="utf-8"
+    )
+
+    return {
+        "status": "ok",
+        "trigger": trigger,
+        "items_total": len(items),
+        "items_relevant": len(relevant_items),
+        "items_filtered_out": len(items) - len(relevant_items),
+        "categories": list(by_category.keys()),
+        "digest": digest_text + resources_table,
+        "digest_file": str(digest_file),
+        "last_synthesis_at": datetime.now(timezone.utc).isoformat(),
+        "relevance_scores": [
+            {
+                "category": i.get("category"),
+                "score": i["relevance_score"],
+                "matched_goal": i.get("matched_goal"),
+                "fills_gap": i.get("fills_gap"),
+                "trusted": i.get("trusted_source_boost", False),
+            }
+            for i in scored_items
+        ],
+    }
+
+
+# ── Synthesis endpoints ───────────────────────────────────────────────────────
+
+class SynthesisRequest(BaseModel):
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/synthesis/digest")
+async def synthesis_digest(req: SynthesisRequest):
+    """Daily digest — called by openclaw cron at 07:00."""
+    try:
+        result = await _run_synthesis(req.user_id, req.workspace_id, trigger="daily_digest")
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
