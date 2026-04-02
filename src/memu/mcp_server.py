@@ -739,9 +739,7 @@ class CategoryPayload(BaseModel):
     description: str
 
 
-DEFAULT_CATEGORIES = [
-    CategoryPayload(name="supadense", description="Learning goals, intent, and personal growth objectives"),
-]
+DEFAULT_CATEGORIES = []
 
 
 class OnboardRequest(BaseModel):
@@ -1014,3 +1012,147 @@ async def supadense_update_goals(req: UpdateGoalsRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Onboarding ────────────────────────────────────────────────────────────────
+
+async def get_or_create_learning_profile(user_id: str, workspace_id: str) -> dict:
+    import uuid
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT id, user_id, workspace_id, onboarded_at,
+                   last_synthesis_at, depth_prefs, spaced_rep_config
+            FROM learning.learning_profiles
+            WHERE user_id = $1 AND workspace_id = $2
+            """,
+            user_id, workspace_id
+        )
+        if row:
+            return dict(row)
+        new_id = str(uuid.uuid4())
+        await conn.execute(
+            """
+            INSERT INTO learning.learning_profiles
+              (id, user_id, workspace_id)
+            VALUES ($1, $2, $3)
+            """,
+            new_id, user_id, workspace_id
+        )
+        return {"id": new_id, "user_id": user_id, "workspace_id": workspace_id,
+                "onboarded_at": None, "depth_prefs": {}}
+    finally:
+        await conn.close()
+
+
+@app.get("/tools/onboarding/status")
+async def onboarding_status(
+    user_id: str = DEFAULT_USER_ID,
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+):
+    try:
+        profile = await get_or_create_learning_profile(user_id, workspace_id)
+        return {
+            "status": "ok",
+            "onboarded": profile["onboarded_at"] is not None,
+            "onboarded_at": str(profile["onboarded_at"]) if profile["onboarded_at"] else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class OnboardingCompleteRequest(BaseModel):
+    goals: list[str]
+    gaps: list[str]
+    learning_intent: str
+    depth_preferences: dict[str, str]
+    trusted_sources: list[str]
+    scout_platforms: list[str]
+    categories: list[dict]
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/onboarding/complete")
+async def onboarding_complete(req: OnboardingCompleteRequest):
+    import uuid
+    from datetime import datetime, timezone
+
+    # 1. Write supadense.md from scratch with all answers
+    SUPADENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    goals_lines = "\n".join(f"- {g}" for g in req.goals)
+    gaps_lines = "\n".join(f"- {g}" for g in req.gaps)
+    sources_lines = "\n".join(f"- {s}" for s in req.trusted_sources)
+    depth_lines = "\n".join(f"{k}: {v}" for k, v in req.depth_preferences.items())
+
+    supadense_content = f"""---
+version: 1
+last_synthesis_at: null
+last_digest_item_ids: []
+scout_config:
+  platforms: {json.dumps(req.scout_platforms)}
+  scroll_depth: 25
+  relevance_threshold: 0.72
+  auto_ingest: true
+  notify_threshold: 0.5
+---
+
+## Goals
+{goals_lines}
+
+## Gaps
+{gaps_lines}
+
+## Learning intent
+{req.learning_intent}
+
+## Trusted sources
+{sources_lines}
+
+## Depth preferences
+{depth_lines}
+"""
+    SUPADENSE_PATH.write_text(supadense_content, encoding="utf-8")
+
+    # 2. Write depth_prefs + mark onboarded_at in learning_profiles
+    profile = await get_or_create_learning_profile(req.user_id, req.workspace_id)
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        await conn.execute(
+            """
+            UPDATE learning.learning_profiles
+            SET depth_prefs = $1, onboarded_at = $2, updated_at = now()
+            WHERE id = $3
+            """,
+            json.dumps(req.depth_preferences),
+            datetime.now(timezone.utc),
+            profile["id"]
+        )
+    finally:
+        await conn.close()
+
+    # 3. Set up user-defined KB categories
+    global service
+    existing = await get_categories_from_db(req.user_id, req.workspace_id)
+    if not existing:
+        cats_to_create = req.categories if req.categories else []
+        for cat in cats_to_create:
+            await upsert_category_in_db(
+                cat["name"], cat.get("description", ""),
+                req.user_id, req.workspace_id
+            )
+            write_category_md(cat["name"], cat.get("description", ""))
+        service = await build_service_from_db()
+
+    return {
+        "status": "ok",
+        "message": "Onboarding complete. Lumen is ready.",
+        "supadense_path": str(SUPADENSE_PATH),
+        "goals": req.goals,
+        "gaps": req.gaps,
+        "depth_preferences": req.depth_preferences,
+        "scout_platforms": req.scout_platforms,
+        "categories_created": [c["name"] for c in req.categories],
+    }
