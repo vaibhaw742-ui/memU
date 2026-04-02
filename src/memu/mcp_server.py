@@ -372,17 +372,32 @@ class MemorizeRequest(BaseModel):
 @app.post("/tools/memorize")
 async def memorize(req: MemorizeRequest):
     try:
+        workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+        # URL dedup check
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            existing = await conn.fetchrow(
+                "SELECT id FROM learning.resources WHERE url = $1 AND user_id = $2 AND workspace_id = $3",
+                req.url, req.user_id, workspace_id
+            )
+        finally:
+            await conn.close()
+        if existing:
+            return {
+                "status": "skipped",
+                "reason": "already_memorized",
+                "url": req.url,
+                "message": f"URL already in knowledge base. Resource id: {existing['id']}",
+            }
         result = await service.memorize(
             resource_url=req.url,
-            user={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
+            user={"user_id": req.user_id, "workspace_id": workspace_id},
         )
         updated_categories = [c.get("name") for c in result.get("categories", [])]
-
         for cat in result.get("categories", []):
             summary = cat.get("summary") or cat.get("description", "")
             if summary:
                 append_item_to_category_md(cat.get("name", ""), summary[:120])
-
         return {
             "status": "ok",
             "user_id": req.user_id,
@@ -401,6 +416,25 @@ async def memorize(req: MemorizeRequest):
 async def memorize_stream(req: MemorizeRequest):
     async def event_generator():
         try:
+            workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+            # URL dedup check
+            conn = await asyncpg.connect(DATABASE_URL)
+            try:
+                existing = await conn.fetchrow(
+                    "SELECT id FROM learning.resources WHERE url = $1 AND user_id = $2 AND workspace_id = $3",
+                    req.url, req.user_id, workspace_id
+                )
+            finally:
+                await conn.close()
+            if existing:
+                yield sse("done", {
+                    "status": "skipped",
+                    "reason": "already_memorized",
+                    "url": req.url,
+                    "message": f"⚠️ URL already in knowledge base.",
+                })
+                return
+
             yield sse("progress", {
                 "step": 1,
                 "status": "fetching",
@@ -435,7 +469,7 @@ async def memorize_stream(req: MemorizeRequest):
                             resource_url=req.url,
                             user={
                                 "user_id": req.user_id,
-                                "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID
+                                "workspace_id": workspace_id
                             },
                         )
                     finally:
@@ -751,7 +785,6 @@ class OnboardRequest(BaseModel):
 @app.post("/admin/onboard")
 async def onboard(req: OnboardRequest):
     global service
-    # Merge defaults with user-provided categories (dedupe by name)
     existing_names = {c.name.lower() for c in req.categories}
     all_categories = req.categories + [c for c in DEFAULT_CATEGORIES if c.name.lower() not in existing_names]
     saved = []
@@ -905,6 +938,7 @@ async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str
 
     return {"status": "ok", "updated": updated}
 
+
 # ── supadense helpers ─────────────────────────────────────────────────────────
 
 def _parse_bullet_list(text: str) -> list[str]:
@@ -1037,9 +1071,22 @@ async def get_or_create_learning_profile(user_id: str, workspace_id: str) -> dic
             INSERT INTO learning.learning_profiles
               (id, user_id, workspace_id)
             VALUES ($1, $2, $3)
+            ON CONFLICT ON CONSTRAINT ix_learning_profiles__scope DO NOTHING
             """,
             new_id, user_id, workspace_id
         )
+        # Re-fetch in case another request inserted first
+        row = await conn.fetchrow(
+            """
+            SELECT id, user_id, workspace_id, onboarded_at,
+                   last_synthesis_at, depth_prefs, spaced_rep_config
+            FROM learning.learning_profiles
+            WHERE user_id = $1 AND workspace_id = $2
+            """,
+            user_id, workspace_id
+        )
+        if row:
+            return dict(row)
         return {"id": new_id, "user_id": user_id, "workspace_id": workspace_id,
                 "onboarded_at": None, "depth_prefs": {}}
     finally:
@@ -1076,7 +1123,6 @@ class OnboardingCompleteRequest(BaseModel):
 
 @app.post("/tools/onboarding/complete")
 async def onboarding_complete(req: OnboardingCompleteRequest):
-    import uuid
     from datetime import datetime, timezone
 
     # 1. Write supadense.md from scratch with all answers
