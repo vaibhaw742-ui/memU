@@ -31,10 +31,34 @@ app = FastAPI(title="Lumen MCP Bridge", version="0.2.0")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/memu")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-CATEGORIES_MD_DIR = Path(os.getenv("CATEGORIES_MD_DIR", "./categories"))
-SUPADENSE_PATH = Path(os.getenv("SUPADENSE_PATH", "./openclaw_learning/workspace/supadense.md"))
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "./openclaw_learning/workspace"))
 DEFAULT_USER_ID = "default"
 DEFAULT_WORKSPACE_ID = "default"
+
+
+# ── Per-user path helpers ─────────────────────────────────────────────────────
+
+def _user_dir(user_id: str, workspace_id: str) -> Path:
+    path = WORKSPACE_ROOT / "users" / f"{user_id}__{workspace_id}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+def _supadense_path(user_id: str, workspace_id: str) -> Path:
+    return _user_dir(user_id, workspace_id) / "supadense.md"
+
+def _categories_dir(user_id: str, workspace_id: str) -> Path:
+    d = _user_dir(user_id, workspace_id) / "categories"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _digests_dir(user_id: str, workspace_id: str) -> Path:
+    d = _user_dir(user_id, workspace_id) / "digests"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _memory_path(user_id: str, workspace_id: str) -> Path:
+    return _user_dir(user_id, workspace_id) / "MEMORY.md"
+
 
 # ── Category summary prompt ───────────────────────────────────────────────────
 
@@ -206,9 +230,10 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
-def write_category_md(name: str, description: str, summary: str = ""):
-    CATEGORIES_MD_DIR.mkdir(parents=True, exist_ok=True)
-    path = CATEGORIES_MD_DIR / f"{slug(name)}.md"
+def write_category_md(name: str, description: str, user_id: str = DEFAULT_USER_ID,
+                      workspace_id: str = DEFAULT_WORKSPACE_ID, summary: str = ""):
+    cats_dir = _categories_dir(user_id, workspace_id)
+    path = cats_dir / f"{slug(name)}.md"
     existing_items = ""
     if path.exists():
         content = path.read_text()
@@ -228,15 +253,20 @@ def write_category_md(name: str, description: str, summary: str = ""):
     path.write_text(content)
 
 
-def delete_category_md(name: str):
-    path = CATEGORIES_MD_DIR / f"{slug(name)}.md"
+def delete_category_md(name: str, user_id: str = DEFAULT_USER_ID,
+                       workspace_id: str = DEFAULT_WORKSPACE_ID):
+    cats_dir = _categories_dir(user_id, workspace_id)
+    path = cats_dir / f"{slug(name)}.md"
     if path.exists():
         path.unlink()
 
 
-def append_item_to_category_md(category_name: str, summary_line: str):
+def append_item_to_category_md(category_name: str, summary_line: str,
+                                user_id: str = DEFAULT_USER_ID,
+                                workspace_id: str = DEFAULT_WORKSPACE_ID):
     from datetime import date
-    path = CATEGORIES_MD_DIR / f"{slug(category_name)}.md"
+    cats_dir = _categories_dir(user_id, workspace_id)
+    path = cats_dir / f"{slug(category_name)}.md"
     if path.exists():
         with open(path, "a") as f:
             f.write(f"\n- [{date.today()}] {summary_line}")
@@ -279,8 +309,9 @@ def build_database_config() -> DatabaseConfig:
     )
 
 
-async def build_service_from_db() -> MemoryService:
-    rows = await get_categories_from_db()
+async def build_service_from_db(user_id: str = DEFAULT_USER_ID,
+                                 workspace_id: str = DEFAULT_WORKSPACE_ID) -> MemoryService:
+    rows = await get_categories_from_db(user_id, workspace_id)
     if rows:
         categories = [
             CategoryConfig(
@@ -310,7 +341,7 @@ async def build_service_from_db() -> MemoryService:
             method="llm",
             route_intention=False,
         ),
-        category_md_output_dir=str(CATEGORIES_MD_DIR),
+        category_md_output_dir=str(_categories_dir(user_id, workspace_id)),
     )
 
 
@@ -364,7 +395,8 @@ async def memorize(req: MemorizeRequest):
                 "url": req.url,
                 "message": f"URL already in knowledge base. Resource id: {existing['id']}",
             }
-        result = await service.memorize(
+        user_service = await build_service_from_db(req.user_id, workspace_id)
+        result = await user_service.memorize(
             resource_url=req.url,
             user={"user_id": req.user_id, "workspace_id": workspace_id},
         )
@@ -372,7 +404,8 @@ async def memorize(req: MemorizeRequest):
         for cat in result.get("categories", []):
             summary = cat.get("summary") or cat.get("description", "")
             if summary:
-                append_item_to_category_md(cat.get("name", ""), summary[:120])
+                append_item_to_category_md(cat.get("name", ""), summary[:120],
+                                           req.user_id, workspace_id)
         return {
             "status": "ok",
             "user_id": req.user_id,
@@ -439,7 +472,8 @@ async def memorize_stream(req: MemorizeRequest):
                     hb_task = asyncio.create_task(heartbeat())
 
                     try:
-                        result = await service.memorize(
+                        user_service = await build_service_from_db(req.user_id, workspace_id)
+                        result = await user_service.memorize(
                             resource_url=req.url,
                             user={
                                 "user_id": req.user_id,
@@ -454,6 +488,11 @@ async def memorize_stream(req: MemorizeRequest):
                             pass
 
                     updated_categories = [c.get("name") for c in result.get("categories", [])]
+                    for cat in result.get("categories", []):
+                        summary = cat.get("summary") or cat.get("description", "")
+                        if summary:
+                            append_item_to_category_md(cat.get("name", ""), summary[:120],
+                                                       req.user_id, workspace_id)
 
                     await queue.put(("done", {
                         "status": "ok",
@@ -512,9 +551,11 @@ class RetrieveRequest(BaseModel):
 @app.post("/tools/retrieve")
 async def retrieve(req: RetrieveRequest):
     try:
-        result = await service.retrieve(
+        workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+        user_service = await build_service_from_db(req.user_id, workspace_id)
+        result = await user_service.retrieve(
             queries=[{"role": "user", "content": {"text": req.query}}],
-            where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
+            where={"user_id": req.user_id, "workspace_id": workspace_id},
         )
         context_parts = []
         for cat in result.get("categories", [])[:3]:
@@ -552,8 +593,10 @@ class ListItemsRequest(BaseModel):
 @app.post("/tools/list_items")
 async def list_items(req: ListItemsRequest):
     try:
-        result = await service.list_memory_items(
-            where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
+        workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+        user_service = await build_service_from_db(req.user_id, workspace_id)
+        result = await user_service.list_memory_items(
+            where={"user_id": req.user_id, "workspace_id": workspace_id},
         )
         items = result.get("items", [])
         source_urls = await get_source_urls_for_items(items)
@@ -577,8 +620,10 @@ class ListCategoriesRequest(BaseModel):
 @app.post("/tools/list_categories")
 async def list_categories(req: ListCategoriesRequest):
     try:
-        result = await service.list_memory_categories(
-            where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
+        workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+        user_service = await build_service_from_db(req.user_id, workspace_id)
+        result = await user_service.list_memory_categories(
+            where={"user_id": req.user_id, "workspace_id": workspace_id},
         )
         return {"status": "ok", "categories": result.get("categories", [])}
     except Exception as e:
@@ -595,8 +640,10 @@ class ClearMemoryRequest(BaseModel):
 @app.post("/tools/clear_memory")
 async def clear_memory(req: ClearMemoryRequest):
     try:
-        await service.clear_memory(
-            where={"user_id": req.user_id, "workspace_id": req.workspace_id or DEFAULT_WORKSPACE_ID},
+        workspace_id = req.workspace_id or DEFAULT_WORKSPACE_ID
+        user_service = await build_service_from_db(req.user_id, workspace_id)
+        await user_service.clear_memory(
+            where={"user_id": req.user_id, "workspace_id": workspace_id},
         )
         return {"status": "ok", "message": "Memory cleared"}
     except Exception as e:
@@ -755,15 +802,13 @@ class OnboardRequest(BaseModel):
 
 @app.post("/admin/onboard")
 async def onboard(req: OnboardRequest):
-    global service
     existing_names = {c.name.lower() for c in req.categories}
     all_categories = req.categories + [c for c in DEFAULT_CATEGORIES if c.name.lower() not in existing_names]
     saved = []
     for cat in all_categories:
         cat_id = await upsert_category_in_db(cat.name, cat.description, req.user_id, req.workspace_id)
-        write_category_md(cat.name, cat.description)
+        write_category_md(cat.name, cat.description, req.user_id, req.workspace_id)
         saved.append({"id": cat_id, "name": cat.name, "description": cat.description})
-    service = await build_service_from_db()
     return {
         "status": "ok",
         "message": f"Onboarded with {len(saved)} categories",
@@ -790,10 +835,8 @@ class AddCategoryRequest(BaseModel):
 
 @app.post("/admin/categories/add")
 async def add_category(req: AddCategoryRequest):
-    global service
     cat_id = await upsert_category_in_db(req.name, req.description, req.user_id, req.workspace_id)
-    write_category_md(req.name, req.description)
-    service = await build_service_from_db()
+    write_category_md(req.name, req.description, req.user_id, req.workspace_id)
     return {"status": "ok", "id": cat_id, "name": req.name, "slug": slug(req.name)}
 
 
@@ -807,10 +850,8 @@ class UpdateCategoryRequest(BaseModel):
 
 @app.put("/admin/categories/{category_name}")
 async def update_category(category_name: str, req: UpdateCategoryRequest):
-    global service
     cat_id = await upsert_category_in_db(category_name, req.description, req.user_id, req.workspace_id)
-    write_category_md(category_name, req.description)
-    service = await build_service_from_db()
+    write_category_md(category_name, req.description, req.user_id, req.workspace_id)
     return {"status": "ok", "id": cat_id, "name": category_name, "description": req.description}
 
 
@@ -823,24 +864,20 @@ class DeleteCategoryRequest(BaseModel):
 
 @app.delete("/admin/categories/{category_name}")
 async def delete_category(category_name: str, req: DeleteCategoryRequest):
-    global service
     if category_name.lower() in ("supadense", "supadense.md"):
         raise HTTPException(status_code=400, detail="supadense.md is protected and cannot be deleted.")
     deleted = await delete_category_from_db(category_name, req.user_id, req.workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Category '{category_name}' not found")
-    delete_category_md(category_name)
-    service = await build_service_from_db()
+    delete_category_md(category_name, req.user_id, req.workspace_id)
     return {"status": "ok", "deleted": category_name}
 
 
 # ── Admin: Reload service ─────────────────────────────────────────────────────
 
 @app.post("/admin/reload")
-async def reload_service():
-    global service
-    service = await build_service_from_db()
-    rows = await get_categories_from_db()
+async def reload_service(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID):
+    rows = await get_categories_from_db(user_id, workspace_id)
     return {
         "status": "reloaded",
         "categories": [r["name"] for r in rows],
@@ -879,7 +916,8 @@ async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str
     if not cat_items:
         return {"status": "ok", "message": "No category-item links found", "updated": []}
 
-    llm_client = service._get_llm_client()
+    user_service = await build_service_from_db(user_id, workspace_id)
+    llm_client = user_service._get_llm_client()
     updated = []
     for cid, items in cat_items.items():
         meta = cat_meta[cid]
@@ -889,7 +927,7 @@ async def regenerate_summaries(user_id: str = DEFAULT_USER_ID, workspace_id: str
             summary = meta["summary"]
 
         try:
-            prompt = service._build_category_summary_prompt(category=_Cat(), new_memories=items)
+            prompt = user_service._build_category_summary_prompt(category=_Cat(), new_memories=items)
             summary_text = await llm_client.summarize(prompt, system_prompt=None)
             cleaned = summary_text.replace("```markdown", "").replace("```", "").strip()
         except Exception as e:
@@ -930,10 +968,11 @@ def _parse_key_value(text: str) -> dict:
     return result
 
 
-def _parse_supadense() -> dict:
-    if not SUPADENSE_PATH.exists():
-        return {"error": f"supadense.md not found at {SUPADENSE_PATH}"}
-    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+def _parse_supadense(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID) -> dict:
+    path = _supadense_path(user_id, workspace_id)
+    if not path.exists():
+        return {"error": f"supadense.md not found for user {user_id}"}
+    raw = path.read_text(encoding="utf-8")
     post = fm.loads(raw)
     sections: dict[str, str] = {}
     current_key = None
@@ -960,15 +999,20 @@ def _parse_supadense() -> dict:
     }
 
 
-def _update_supadense_meta(key: str, value) -> None:
-    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+def _update_supadense_meta(key: str, value, user_id: str = DEFAULT_USER_ID,
+                            workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
+    path = _supadense_path(user_id, workspace_id)
+    raw = path.read_text(encoding="utf-8")
     post = fm.loads(raw)
     post.metadata[key] = value
-    SUPADENSE_PATH.write_text(fm.dumps(post), encoding="utf-8")
+    path.write_text(fm.dumps(post), encoding="utf-8")
 
 
-def _append_to_supadense_section(section_title: str, new_items: list[str]) -> None:
-    raw = SUPADENSE_PATH.read_text(encoding="utf-8")
+def _append_to_supadense_section(section_title: str, new_items: list[str],
+                                  user_id: str = DEFAULT_USER_ID,
+                                  workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
+    path = _supadense_path(user_id, workspace_id)
+    raw = path.read_text(encoding="utf-8")
     lines = raw.splitlines()
     target = f"## {section_title}"
     section_start = None
@@ -987,15 +1031,15 @@ def _append_to_supadense_section(section_title: str, new_items: list[str]) -> No
     else:
         for item in reversed(new_items):
             lines.insert(section_end, f"- {item}")
-    SUPADENSE_PATH.write_text("\n".join(lines), encoding="utf-8")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 # ── supadense endpoints ───────────────────────────────────────────────────────
 
 @app.get("/tools/supadense/read")
-async def supadense_read():
+async def supadense_read(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID):
     try:
-        return {"status": "ok", "data": _parse_supadense()}
+        return {"status": "ok", "data": _parse_supadense(user_id, workspace_id)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1003,17 +1047,64 @@ async def supadense_read():
 class UpdateGoalsRequest(BaseModel):
     goals: list[str]
     user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
 
 
 @app.post("/tools/supadense/update_goals")
 async def supadense_update_goals(req: UpdateGoalsRequest):
     try:
-        _append_to_supadense_section("Goals", req.goals)
+        _append_to_supadense_section("Goals", req.goals, req.user_id, req.workspace_id)
         return {
             "status": "ok",
             "added": req.goals,
             "message": f"Added {len(req.goals)} goal(s) to supadense.md",
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── MEMORY.md endpoints ───────────────────────────────────────────────────────
+
+@app.get("/tools/memory/read")
+async def memory_read(user_id: str = DEFAULT_USER_ID, workspace_id: str = DEFAULT_WORKSPACE_ID):
+    try:
+        path = _memory_path(user_id, workspace_id)
+        if not path.exists():
+            return {"status": "ok", "content": "", "exists": False}
+        return {"status": "ok", "content": path.read_text(encoding="utf-8"), "exists": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class MemoryWriteRequest(BaseModel):
+    content: str
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/memory/write")
+async def memory_write(req: MemoryWriteRequest):
+    try:
+        path = _memory_path(req.user_id, req.workspace_id)
+        path.write_text(req.content, encoding="utf-8")
+        return {"status": "ok", "message": "MEMORY.md written", "path": str(path)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class MemoryAppendRequest(BaseModel):
+    content: str
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/memory/append")
+async def memory_append(req: MemoryAppendRequest):
+    try:
+        path = _memory_path(req.user_id, req.workspace_id)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n{req.content}")
+        return {"status": "ok", "message": "Appended to MEMORY.md", "path": str(path)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1041,7 +1132,7 @@ async def get_or_create_learning_profile(user_id: str, workspace_id: str) -> dic
             INSERT INTO learning.learning_profiles
               (id, user_id, workspace_id)
             VALUES ($1, $2, $3)
-            ON CONFLICT ON CONSTRAINT ix_learning_profiles__scope DO NOTHING
+            ON CONFLICT (user_id, workspace_id) DO NOTHING
             """,
             new_id, user_id, workspace_id
         )
@@ -1094,7 +1185,8 @@ class OnboardingCompleteRequest(BaseModel):
 async def onboarding_complete(req: OnboardingCompleteRequest):
     from datetime import datetime, timezone
 
-    SUPADENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure user dir exists
+    _user_dir(req.user_id, req.workspace_id)
 
     goals_lines = "\n".join(f"- {g}" for g in req.goals)
     gaps_lines = "\n".join(f"- {g}" for g in req.gaps)
@@ -1128,7 +1220,18 @@ scout_config:
 ## Depth preferences
 {depth_lines}
 """
-    SUPADENSE_PATH.write_text(supadense_content, encoding="utf-8")
+    supadense_p = _supadense_path(req.user_id, req.workspace_id)
+    supadense_p.write_text(supadense_content, encoding="utf-8")
+
+    # Init MEMORY.md if it doesn't exist
+    mem_path = _memory_path(req.user_id, req.workspace_id)
+    if not mem_path.exists():
+        mem_path.write_text(
+            f"# Lumen Memory — {req.user_id}\n\n"
+            f"*Initialised during onboarding*\n\n"
+            f"## User profile\n- Learning intent: {req.learning_intent}\n",
+            encoding="utf-8"
+        )
 
     profile = await get_or_create_learning_profile(req.user_id, req.workspace_id)
     conn = await asyncpg.connect(DATABASE_URL)
@@ -1146,7 +1249,6 @@ scout_config:
     finally:
         await conn.close()
 
-    global service
     existing = await get_categories_from_db(req.user_id, req.workspace_id)
     if not existing:
         cats_to_create = req.categories if req.categories else []
@@ -1155,13 +1257,13 @@ scout_config:
                 cat["name"], cat.get("description", ""),
                 req.user_id, req.workspace_id
             )
-            write_category_md(cat["name"], cat.get("description", ""))
-        service = await build_service_from_db()
+            write_category_md(cat["name"], cat.get("description", ""),
+                              req.user_id, req.workspace_id)
 
     return {
         "status": "ok",
         "message": "Onboarding complete. Lumen is ready.",
-        "supadense_path": str(SUPADENSE_PATH),
+        "user_dir": str(_user_dir(req.user_id, req.workspace_id)),
         "goals": req.goals,
         "gaps": req.gaps,
         "depth_preferences": req.depth_preferences,
@@ -1221,8 +1323,9 @@ async def _update_last_synthesis(user_id: str, workspace_id: str, item_ids: list
         )
     finally:
         await conn.close()
-    if SUPADENSE_PATH.exists():
-        _update_supadense_meta("last_synthesis_at", now.isoformat())
+    supadense_p = _supadense_path(user_id, workspace_id)
+    if supadense_p.exists():
+        _update_supadense_meta("last_synthesis_at", now.isoformat(), user_id, workspace_id)
 
 
 async def _llm_call(prompt: str, max_tokens: int = 800, temperature: float = 0.7) -> str:
@@ -1318,9 +1421,8 @@ Return ONLY a valid JSON array, no other text. Example:
 
 
 async def _get_existing_items_by_category(
-    user_id: str, workspace_id: str, since: None, categories: list[str]
+    user_id: str, workspace_id: str, since, categories: list[str]
 ) -> dict[str, list[str]]:
-    """Fetch already-synthesized items grouped by category for novelty comparison."""
     if not categories:
         return {}
     conn = await asyncpg.connect(DATABASE_URL)
@@ -1340,7 +1442,6 @@ async def _get_existing_items_by_category(
                 user_id, workspace_id, since
             )
         else:
-            # No last_synthesis_at means this is first synthesis — no existing items
             return {}
         by_cat: dict[str, list[str]] = {}
         for row in rows:
@@ -1354,9 +1455,6 @@ async def _get_existing_items_by_category(
 
 
 def _parse_topic_rows(summary: str) -> list[dict]:
-    """Parse memory item summary into structured topic rows.
-    Format: index | topic | sub-topic | description
-    """
     rows = []
     for line in summary.splitlines():
         line = line.strip()
@@ -1374,7 +1472,6 @@ def _parse_topic_rows(summary: str) -> list[dict]:
 
 
 def _make_topic_key(topic: str, subtopic: str) -> str:
-    """Normalize topic+subtopic into a comparable key."""
     t = re.sub(r"\s+", " ", topic.lower().strip())
     s = re.sub(r"\s+", " ", subtopic.lower().strip())
     return f"{t}||{s}"
@@ -1384,17 +1481,11 @@ def _diff_topics(
     new_items_by_category: dict[str, list[dict]],
     existing_by_category: dict[str, list[str]],
 ) -> dict[str, dict]:
-    """
-    Exact topic-level diff — compares new memory item rows against existing KB rows.
-    Deterministic — no LLM needed. Parses index|topic|subtopic|description format.
-    Returns per category: novel_topics, reinforced_topics, novelty_score.
-    """
     result = {}
 
     for cat, new_items in new_items_by_category.items():
         existing_summaries = existing_by_category.get(cat, [])
 
-        # Build existing topic key set from all previously synthesized items
         existing_keys: set[str] = set()
         for summary in existing_summaries:
             for row in _parse_topic_rows(summary):
@@ -1425,7 +1516,6 @@ def _diff_topics(
                 else:
                     reinforced_topics.append(entry)
 
-        # Deduplicate by key
         seen: set[str] = set()
         deduped_novel = []
         for t in novel_topics:
@@ -1455,6 +1545,128 @@ def _diff_topics(
             "reinforced_count": len(deduped_reinforced),
             "summary": f"{novel_count} new topics, {len(deduped_reinforced)} reinforced out of {total} total rows",
         }
+
+    return result
+
+
+async def _score_item_quality(
+    items: list[dict],
+    goals: list[str],
+    gaps: list[str],
+) -> dict[int, dict]:
+    """
+    LLM-judged quality scoring for each item. Single batched call.
+    Returns dict keyed by item index with depth, specificity, goal_match, gap_addressed scores.
+    """
+    if not items:
+        return {}
+
+    goals_text = "\n".join(f"- {g}" for g in goals)
+    gaps_text = "\n".join(f"- {g}" for g in gaps)
+
+    items_text = ""
+    for i, item in enumerate(items):
+        summary_snippet = (item.get("summary") or "")[:300]
+        items_text += f"\n[{i}] category={item.get('category','?')}\n{summary_snippet}\n"
+
+    prompt = f"""You are a learning content quality assessor. Evaluate each knowledge item on 4 dimensions.
+
+## Learner Goals
+{goals_text}
+
+## Learner Gaps
+{gaps_text}
+
+## Items to assess
+{items_text}
+
+## Instructions
+Return a JSON array. Each element must have:
+- "index": item index number
+- "depth": "low" | "medium" | "high"
+  low = overview/intro only, medium = explains concepts with some detail, high = internals/implementation/specific algorithms
+- "depth_reason": one sentence explaining the depth rating
+- "specificity": "low" | "medium" | "high"
+  low = general concepts only, medium = named techniques/approaches, high = specific code/numbers/benchmarks/exact parameters
+- "specificity_reason": one sentence explaining the specificity rating
+- "goal_match": "none" | "weak" | "strong"
+  none = unrelated, weak = tangentially related, strong = directly advances a goal
+- "goal_match_reason": one sentence, which goal and how
+- "gap_addressed": "none" | "partial" | "full"
+  none = doesn't address any gap, partial = touches on a gap, full = substantially fills a gap
+- "gap_addressed_reason": one sentence, which gap and how much
+
+Return ONLY a valid JSON array, no other text."""
+
+    try:
+        raw = await _llm_call(prompt, max_tokens=1000, temperature=0.1)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        scores = json.loads(raw)
+        return {s["index"]: s for s in scores}
+    except Exception:
+        return {
+            i: {
+                "depth": "medium", "depth_reason": "",
+                "specificity": "medium", "specificity_reason": "",
+                "goal_match": "weak", "goal_match_reason": "",
+                "gap_addressed": "none", "gap_addressed_reason": "",
+            }
+            for i in range(len(items))
+        }
+
+
+def _find_similar_in_kb(
+    new_items_by_category: dict[str, list[dict]],
+    existing_by_category: dict[str, list[str]],
+) -> dict[str, list[dict]]:
+    """
+    For each new item, find existing KB items that share topic keys.
+    Returns per category a list of {new_item_memory_type, similar_topics} dicts.
+    No LLM needed — pure topic key intersection.
+    """
+    result = {}
+
+    for cat, new_items in new_items_by_category.items():
+        existing_summaries = existing_by_category.get(cat, [])
+        if not existing_summaries:
+            result[cat] = []
+            continue
+
+        # Build existing topics with their source summary index
+        existing_topic_map: dict[str, list[str]] = {}  # key -> list of topic displays
+        for summary in existing_summaries:
+            for row in _parse_topic_rows(summary):
+                if not row["topic"] or row["topic"] == "-":
+                    continue
+                key = _make_topic_key(row["topic"], row["subtopic"])
+                subtopic_display = f" → {row['subtopic']}" if row["subtopic"] and row["subtopic"] != "-" else ""
+                display = f"{row['topic']}{subtopic_display}"
+                if key not in existing_topic_map:
+                    existing_topic_map[key] = []
+                if display not in existing_topic_map[key]:
+                    existing_topic_map[key].append(display)
+
+        cat_similar = []
+        for item in new_items:
+            summary = item.get("summary") or ""
+            memory_type = item.get("memory_type") or "unknown"
+            shared_topics = []
+            for row in _parse_topic_rows(summary):
+                if not row["topic"] or row["topic"] == "-":
+                    continue
+                key = _make_topic_key(row["topic"], row["subtopic"])
+                if key in existing_topic_map:
+                    subtopic_display = f" → {row['subtopic']}" if row["subtopic"] and row["subtopic"] != "-" else ""
+                    shared_topics.append(f"{row['topic']}{subtopic_display}")
+
+            if shared_topics:
+                cat_similar.append({
+                    "memory_type": memory_type,
+                    "shared_topics": list(dict.fromkeys(shared_topics)),  # dedup preserving order
+                    "overlap_count": len(shared_topics),
+                })
+
+        result[cat] = cat_similar
 
     return result
 
@@ -1495,7 +1707,7 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
             "trigger": trigger,
         }
 
-    supadense = _parse_supadense()
+    supadense = _parse_supadense(user_id, workspace_id)
     goals = supadense.get("goals", [])
     learning_intent = supadense.get("learning_intent", "")
     gaps = supadense.get("gaps", [])
@@ -1518,13 +1730,29 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
             by_category[cat] = []
         by_category[cat].append(item)
 
-    # Fetch existing KB items for novelty comparison
     existing_by_category = await _get_existing_items_by_category(
         user_id, workspace_id, since=last_synthesis_at, categories=list(by_category.keys())
     )
 
-    # Run exact topic-level diff (deterministic, no LLM)
     novelty = _diff_topics(by_category, existing_by_category)
+
+    # Quality scoring — LLM judged
+    quality_map = await _score_item_quality(relevant_items, goals, gaps)
+
+    # Similar links already in KB
+    similar_in_kb = _find_similar_in_kb(by_category, existing_by_category)
+
+    # Attach quality scores to relevant_items
+    for i, item in enumerate(relevant_items):
+        q = quality_map.get(i, {})
+        item["depth"] = q.get("depth", "medium")
+        item["depth_reason"] = q.get("depth_reason", "")
+        item["specificity"] = q.get("specificity", "medium")
+        item["specificity_reason"] = q.get("specificity_reason", "")
+        item["goal_match"] = q.get("goal_match", "weak")
+        item["goal_match_reason"] = q.get("goal_match_reason", "")
+        item["gap_addressed"] = q.get("gap_addressed", "none")
+        item["gap_addressed_reason"] = q.get("gap_addressed_reason", "")
 
     items_text = ""
     for cat, cat_items in by_category.items():
@@ -1532,22 +1760,34 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
         cat_novelty = novelty.get(cat, {})
         novelty_score = cat_novelty.get("novelty_score", 0.0)
         novelty_summary = cat_novelty.get("summary", "")
-        items_text += f"\n### {cat} (depth: {depth_target} | novelty: {novelty_score:.0%})\n"
+        cat_similar = similar_in_kb.get(cat, [])
+        items_text += f"\n### {cat} (depth target: {depth_target} | novelty: {novelty_score:.0%})\n"
         if novelty_summary:
             items_text += f"*{novelty_summary}*\n"
         for item in cat_items[:8]:
             score = item["relevance_score"]
+            depth = item.get("depth", "medium")
+            specificity = item.get("specificity", "medium")
+            goal_match = item.get("goal_match", "weak")
+            gap_addressed = item.get("gap_addressed", "none")
             matched_goal = item.get("matched_goal") or "general learning"
             fills_gap = item.get("fills_gap")
             trusted = "TRUSTED SOURCE " if item.get("trusted_source_boost") else ""
             summary_snippet = (item.get("summary") or "")[:300]
             gap_note = f" | fills gap: {fills_gap}" if fills_gap else ""
             items_text += (
-                f"- [relevance={score}] {trusted}goal: {matched_goal}{gap_note}\n"
+                f"- [relevance={score} | depth={depth} | specificity={specificity} | "
+                f"goal_match={goal_match} | gap_addressed={gap_addressed}] {trusted}\n"
+                f"  goal: {matched_goal}{gap_note}\n"
+                f"  {item.get('depth_reason','')}\n"
                 f"  {summary_snippet}\n"
             )
+        if cat_similar:
+            items_text += "Similar already in KB:\n"
+            for s in cat_similar[:3]:
+                shared = ", ".join(s["shared_topics"][:5])
+                items_text += f"  ~ {s['memory_type']}: shares [{shared}]\n"
 
-    # Build exact novelty section for prompt — topic/subtopic level
     novelty_text = ""
     for cat, n in novelty.items():
         novel_topics = n.get("novel_topics", [])
@@ -1593,7 +1833,7 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
 **Depth instructions per category:**
 {depth_instructions or "- default: working depth for all categories"}
 
-## Relevant new knowledge ({len(relevant_items)} items scored by relevance to your goals)
+## Relevant new knowledge ({len(relevant_items)} items with quality scores)
 {items_text}
 
 ## Knowledge delta (what's new vs already in KB)
@@ -1603,16 +1843,21 @@ async def _run_synthesis(user_id: str, workspace_id: str, trigger: str = "manual
 Write a targeted digest with these sections:
 
 **What's genuinely new in your KB**
-Only cover concepts flagged as novel above. Be specific — name the concept, explain it at the correct depth, and say which goal it advances. Skip anything that's pure reinforcement here.
+Only cover topics flagged as novel. For each:
+- Name the exact topic/subtopic
+- Explain at correct depth (use the depth score as guide — high = go deep)
+- State which goal it advances
+- If specificity is high, call out the specific detail (code, number, benchmark)
+- If similar content already exists in KB, note what's different about this new item
 
 **What this reinforces**
-Brief — list concepts this new content confirms you already knew. 2-3 bullets max.
+Brief — list topics this confirms you already knew. 2-3 bullets max.
 
 **What this updates**
-If any new content corrects or deepens prior understanding, call it out explicitly.
+If new content corrects or deepens prior understanding, call it out explicitly.
 
 **Connections**
-How does this new knowledge connect to your goals or other things you know?
+How does this connect to your goals or other knowledge?
 
 **Gaps this surfaces**
 What do you still not know? Be specific.
@@ -1627,30 +1872,43 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 600 words."""
     item_ids = [item["id"] for item in items]
     await _update_last_synthesis(user_id, workspace_id, item_ids)
 
-    # Build resources table
     resources_table = "\n\n---\n\n## Knowledge sources\n\n"
-    resources_table += "| # | Category | Relevance | Novelty | Matched goal | Fills gap | Trusted |\n"
-    resources_table += "|---|----------|-----------|---------|-------------|-----------|--------|\n"
-    for idx, item in enumerate(scored_items, 1):
+    resources_table += "| # | Category | Relevance | Depth | Specificity | Goal match | Gap addressed | Novelty | Trusted |\n"
+    resources_table += "|---|----------|-----------|-------|-------------|------------|---------------|---------|--------|\n"
+    for idx, item in enumerate(relevant_items, 1):
         cat = item.get("category") or "general"
         score = item["relevance_score"]
+        depth = item.get("depth", "-")
+        specificity = item.get("specificity", "-")
+        goal_match = item.get("goal_match", "-")
+        gap_addressed = item.get("gap_addressed", "-")
         cat_novelty = novelty.get(cat, {})
         novelty_score = cat_novelty.get("novelty_score", "-")
         novelty_pct = f"{novelty_score:.0%}" if isinstance(novelty_score, float) else "-"
-        matched_goal = (item.get("matched_goal") or "-")[:50]
-        fills_gap = (item.get("fills_gap") or "-")[:50]
         trusted = "yes" if item.get("trusted_source_boost") else "-"
-        filtered_note = " *(filtered)*" if item["relevance_score"] < 0.4 else ""
-        resources_table += f"| {idx} | {cat} | {score} | {novelty_pct} | {matched_goal} | {fills_gap} | {trusted} |{filtered_note}\n"
+        resources_table += f"| {idx} | {cat} | {score} | {depth} | {specificity} | {goal_match} | {gap_addressed} | {novelty_pct} | {trusted} |\n"
 
-    digest_dir = SUPADENSE_PATH.parent / "digests"
-    digest_dir.mkdir(parents=True, exist_ok=True)
-    digest_file = digest_dir / f"{date.today().isoformat()}.md"
+    # Similar links section
+    similar_text = "\n\n## Similar already in your KB\n\n"
+    has_similar = False
+    for cat, similar_list in similar_in_kb.items():
+        if similar_list:
+            has_similar = True
+            similar_text += f"**{cat}**\n"
+            for s in similar_list:
+                shared = ", ".join(s["shared_topics"][:8])
+                similar_text += f"- *{s['memory_type']}* — shares topics: {shared}\n"
+    if not has_similar:
+        similar_text += "*No similar content found in existing KB — this is all new territory.*\n"
+
+    digests_dir = _digests_dir(user_id, workspace_id)
+    digest_file = digests_dir / f"{date.today().isoformat()}.md"
     digest_file.write_text(
         f"# Lumen Digest — {date.today().isoformat()}\n\n"
         f"*Trigger: {trigger} | Items synthesized: {len(relevant_items)} / {len(items)} total*\n\n"
         f"{digest_text}"
-        f"{resources_table}\n",
+        f"{resources_table}"
+        f"{similar_text}\n",
         encoding="utf-8"
     )
 
@@ -1661,7 +1919,7 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 600 words."""
         "items_relevant": len(relevant_items),
         "items_filtered_out": len(items) - len(relevant_items),
         "categories": list(by_category.keys()),
-        "digest": digest_text + resources_table,
+        "digest": digest_text + resources_table + similar_text,
         "digest_file": str(digest_file),
         "last_synthesis_at": datetime.now(timezone.utc).isoformat(),
         "novelty": {
@@ -1676,16 +1934,23 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 600 words."""
             }
             for cat, n in novelty.items()
         },
-        "relevance_scores": [
+        "quality_scores": [
             {
                 "category": i.get("category"),
-                "score": i["relevance_score"],
-                "matched_goal": i.get("matched_goal"),
-                "fills_gap": i.get("fills_gap"),
-                "trusted": i.get("trusted_source_boost", False),
+                "memory_type": i.get("memory_type"),
+                "relevance": i["relevance_score"],
+                "depth": i.get("depth"),
+                "depth_reason": i.get("depth_reason"),
+                "specificity": i.get("specificity"),
+                "specificity_reason": i.get("specificity_reason"),
+                "goal_match": i.get("goal_match"),
+                "goal_match_reason": i.get("goal_match_reason"),
+                "gap_addressed": i.get("gap_addressed"),
+                "gap_addressed_reason": i.get("gap_addressed_reason"),
             }
-            for i in scored_items
+            for i in relevant_items
         ],
+        "similar_in_kb": similar_in_kb,
     }
 
 
