@@ -59,6 +59,20 @@ def _digests_dir(user_id: str, workspace_id: str) -> Path:
 def _memory_path(user_id: str, workspace_id: str) -> Path:
     return _user_dir(user_id, workspace_id) / "MEMORY.md"
 
+def _wiki_dir(user_id: str, workspace_id: str) -> Path:
+    d = _user_dir(user_id, workspace_id) / "wiki"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _wiki_page_path(user_id: str, workspace_id: str, slug: str) -> Path:
+    return _wiki_dir(user_id, workspace_id) / f"{slug}.md"
+
+def _index_path(user_id: str, workspace_id: str) -> Path:
+    return _user_dir(user_id, workspace_id) / "index.md"
+
+def _log_path(user_id: str, workspace_id: str) -> Path:
+    return _user_dir(user_id, workspace_id) / "log.md"
+
 
 # ── Category summary prompt ───────────────────────────────────────────────────
 
@@ -406,6 +420,10 @@ async def memorize(req: MemorizeRequest):
             if summary:
                 append_item_to_category_md(cat.get("name", ""), summary[:120],
                                            req.user_id, workspace_id)
+        await _update_index(req.user_id, workspace_id)
+        _append_log(req.user_id, workspace_id,
+            f"memorize | {req.url} → {', '.join(updated_categories) or 'general'} | "
+            f"items: {len(result.get('items', []))}")
         return {
             "status": "ok",
             "user_id": req.user_id,
@@ -493,6 +511,10 @@ async def memorize_stream(req: MemorizeRequest):
                         if summary:
                             append_item_to_category_md(cat.get("name", ""), summary[:120],
                                                        req.user_id, workspace_id)
+                    await _update_index(req.user_id, workspace_id)
+                    _append_log(req.user_id, workspace_id,
+                        f"memorize | {req.url} → {', '.join(updated_categories) or 'general'} | "
+                        f"items: {len(result.get('items', []))}")
 
                     await queue.put(("done", {
                         "status": "ok",
@@ -1260,6 +1282,13 @@ scout_config:
             write_category_md(cat["name"], cat.get("description", ""),
                               req.user_id, req.workspace_id)
 
+    # Create skeleton index.md and first log entry immediately
+    await _update_index(req.user_id, req.workspace_id)
+    _append_log(req.user_id, req.workspace_id,
+        f"onboarding | user: {req.user_id} | workspace: {req.workspace_id} | "
+        f"categories: {', '.join(c['name'] for c in req.categories)} | "
+        f"goals: {len(req.goals)} | gaps: {len(req.gaps)}")
+
     return {
         "status": "ok",
         "message": "Onboarding complete. Lumen is ready.",
@@ -1269,6 +1298,8 @@ scout_config:
         "depth_preferences": req.depth_preferences,
         "scout_platforms": req.scout_platforms,
         "categories_created": [c["name"] for c in req.categories],
+        "index_created": str(_index_path(req.user_id, req.workspace_id)),
+        "log_created": str(_log_path(req.user_id, req.workspace_id)),
     }
 
 
@@ -1912,6 +1943,10 @@ Be direct, dense, and personal. Talk to the learner as "you". Max 600 words."""
         encoding="utf-8"
     )
 
+    _append_log(user_id, workspace_id,
+        f"digest | {trigger} | items: {len(relevant_items)}/{len(items)} | "
+        f"categories: {', '.join(by_category.keys())} | file: {digest_file.name}")
+
     return {
         "status": "ok",
         "trigger": trigger,
@@ -1967,5 +2002,397 @@ async def synthesis_digest(req: SynthesisRequest):
     try:
         result = await _run_synthesis(req.user_id, req.workspace_id, trigger="daily_digest")
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Wiki helpers ──────────────────────────────────────────────────────────────
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+async def _update_index(user_id: str, workspace_id: str) -> None:
+    """Regenerate index.md for user from DB categories + wiki/ pages."""
+    from datetime import datetime, timezone
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT name, description, parent_category,
+                   COUNT(ci.item_id) as item_count
+            FROM learning.memory_categories mc
+            LEFT JOIN learning.category_items ci ON ci.category_id = mc.id
+            WHERE mc.user_id = $1 AND mc.workspace_id = $2
+            GROUP BY mc.name, mc.description, mc.parent_category
+            ORDER BY mc.parent_category NULLS FIRST, mc.name
+            """,
+            user_id, workspace_id
+        )
+    finally:
+        await conn.close()
+
+    wiki_d = _wiki_dir(user_id, workspace_id)
+
+    # Separate categories, subcategories, concepts
+    categories: dict[str, dict] = {}
+    subcategories: dict[str, list] = {}
+
+    for row in rows:
+        name = row["name"]
+        parent = row["parent_category"]
+        item_count = row["item_count"] or 0
+        if parent:
+            if parent not in subcategories:
+                subcategories[parent] = []
+            subcategories[parent].append({
+                "name": name,
+                "slug": _slug(name),
+                "description": row["description"] or "",
+                "items": item_count,
+            })
+        else:
+            categories[name] = {
+                "slug": _slug(name),
+                "description": row["description"] or "",
+                "items": item_count,
+            }
+
+    # Find concept pages — wiki pages with type: concept in frontmatter
+    concept_pages = []
+    if wiki_d.exists():
+        for page_file in wiki_d.glob("*.md"):
+            try:
+                raw = page_file.read_text(encoding="utf-8")
+                post = fm.loads(raw)
+                if post.metadata.get("type") == "concept":
+                    used_by = post.metadata.get("used_by", [])
+                    concept_pages.append({
+                        "name": post.metadata.get("title", page_file.stem),
+                        "slug": page_file.stem,
+                        "used_by": used_by if isinstance(used_by, list) else [used_by],
+                    })
+            except Exception:
+                pass
+
+    # Count totals
+    total_sources_row = None
+    try:
+        conn2 = await asyncpg.connect(DATABASE_URL)
+        try:
+            total_sources_row = await conn2.fetchval(
+                "SELECT COUNT(*) FROM learning.resources WHERE user_id = $1 AND workspace_id = $2",
+                user_id, workspace_id
+            )
+        finally:
+            await conn2.close()
+    except Exception:
+        pass
+
+    total_pages = len(categories) + sum(len(v) for v in subcategories.values()) + len(concept_pages)
+    total_sources = total_sources_row or 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Build index.md content
+    lines = [
+        f"---",
+        f"updated: {now}",
+        f"total_pages: {total_pages}",
+        f"total_sources: {total_sources}",
+        f"total_concepts: {len(concept_pages)}",
+        f"---",
+        f"",
+        f"# Techapedia — Knowledge Index",
+        f"",
+        f"*{total_pages} pages · {total_sources} sources · last updated {now[:10]}*",
+        f"",
+    ]
+
+    supadense = _parse_supadense(user_id, workspace_id)
+    depth_prefs = supadense.get("depth_preferences", {})
+
+    for cat_name, cat_info in sorted(categories.items()):
+        subs = subcategories.get(cat_name, [])
+        depth = depth_prefs.get(cat_name, "working")
+        sources_note = f"{cat_info['items']} items"
+        lines.append(f"## {cat_name} ({sources_note} · depth: {depth})")
+        lines.append(f"- [[{cat_info['slug']}]] — {cat_info['description']}")
+        for sub in subs:
+            lines.append(f"  - [[{sub['slug']}]] — {sub['description']} ({sub['items']} items)")
+        lines.append("")
+
+    if concept_pages:
+        lines.append("## Concept pages (cross-category)")
+        for cp in sorted(concept_pages, key=lambda x: x["name"]):
+            used = ", ".join(cp["used_by"]) if cp["used_by"] else "—"
+            lines.append(f"- [[{cp['slug']}]] → used by: {used}")
+        lines.append("")
+
+    _index_path(user_id, workspace_id).write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
+
+
+def _append_log(user_id: str, workspace_id: str, entry: str) -> None:
+    """Append a timestamped entry to log.md."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    log_p = _log_path(user_id, workspace_id)
+    if not log_p.exists():
+        log_p.write_text("# Techapedia — Activity Log\n\n", encoding="utf-8")
+    with open(log_p, "a", encoding="utf-8") as f:
+        f.write(f"\n## [{now}] {entry}\n")
+
+
+def _parse_wiki_page(content: str) -> dict:
+    """
+    Parse a wiki page markdown into structured JSON.
+    Extracts frontmatter + all ## sections.
+    Returns dict with metadata + sections dict.
+    """
+    post = fm.loads(content)
+    sections: dict[str, str] = {}
+    current_key = None
+    current_lines: list[str] = []
+
+    for line in post.content.splitlines():
+        if line.startswith("## "):
+            if current_key is not None:
+                sections[current_key] = "\n".join(current_lines).strip()
+            current_key = line[3:].strip().lower().replace(" ", "_")
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_key is not None:
+        sections[current_key] = "\n".join(current_lines).strip()
+
+    # Parse key_concepts into list of {display, slug, description}
+    key_concepts = []
+    for line in sections.get("key_concepts", "").splitlines():
+        line = line.strip().lstrip("- ").strip()
+        if not line:
+            continue
+        # Extract [[slug]] or [[Title]] patterns
+        wiki_links = re.findall(r"\[\[([^\]]+)\]\]", line)
+        desc = re.sub(r"\[\[([^\]]+)\]\]", r"\1", line)
+        key_concepts.append({
+            "display": line,
+            "links": wiki_links,
+            "description": desc,
+        })
+
+    # Parse connections into list
+    connections = []
+    for line in sections.get("connections", "").splitlines():
+        line = line.strip().lstrip("- →").strip()
+        if not line:
+            continue
+        wiki_links = re.findall(r"\[\[([^\]]+)\]\]", line)
+        connections.append({
+            "display": line,
+            "links": wiki_links,
+        })
+
+    # Parse sources into list
+    sources = []
+    for line in sections.get("sources", "").splitlines():
+        line = line.strip().lstrip("0123456789.-) ").strip()
+        if not line:
+            continue
+        url_match = re.search(r"\(([^)]+)\)", line)
+        title = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+        sources.append({
+            "title": title.strip(),
+            "url": url_match.group(1) if url_match else None,
+        })
+
+    # Parse open_questions
+    questions = [
+        line.strip().lstrip("- ?").strip()
+        for line in sections.get("open_questions", "").splitlines()
+        if line.strip().lstrip("- ?").strip()
+    ]
+
+    # Parse gaps
+    gaps = [
+        line.strip().lstrip("- ").strip()
+        for line in sections.get("gaps", "").splitlines()
+        if line.strip().lstrip("- ").strip()
+    ]
+
+    # Parse subcategories
+    subcats = []
+    for line in sections.get("subcategories", "").splitlines():
+        line = line.strip().lstrip("- ").strip()
+        if not line:
+            continue
+        wiki_links = re.findall(r"\[\[([^\]]+)\]\]", line)
+        subcats.append({
+            "display": line,
+            "links": wiki_links,
+        })
+
+    return {
+        "title": post.metadata.get("title", ""),
+        "type": post.metadata.get("type", "category"),
+        "parent": post.metadata.get("parent"),
+        "created": str(post.metadata.get("created", "")),
+        "updated": str(post.metadata.get("updated", "")),
+        "sources": post.metadata.get("sources", 0),
+        "depth": post.metadata.get("depth", "working"),
+        "subcategories_meta": post.metadata.get("subcategories", []),
+        "used_by": post.metadata.get("used_by", []),
+        "sections": {
+            "overview": sections.get("overview", ""),
+            "key_concepts_raw": sections.get("key_concepts", ""),
+            "key_concepts": key_concepts,
+            "current_understanding": sections.get("current_understanding", ""),
+            "open_questions": questions,
+            "connections": connections,
+            "sources_raw": sections.get("sources", ""),
+            "sources": sources,
+            "gaps": gaps,
+            "subcategories": subcats,
+        },
+        "raw_content": post.content,
+    }
+
+
+# ── Wiki endpoints ────────────────────────────────────────────────────────────
+
+@app.get("/tools/wiki/index")
+async def wiki_index(
+    user_id: str = DEFAULT_USER_ID,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+    refresh: bool = False,
+):
+    """
+    Return parsed index.md as structured JSON.
+    If index.md doesn't exist or refresh=True, regenerate it first.
+    """
+    try:
+        index_p = _index_path(user_id, workspace_id)
+        if not index_p.exists() or refresh:
+            await _update_index(user_id, workspace_id)
+
+        raw = index_p.read_text(encoding="utf-8")
+        post = fm.loads(raw)
+
+        # Parse categories + subcategories from content
+        categories = []
+        current_cat = None
+        for line in post.content.splitlines():
+            if line.startswith("## ") and "Concept pages" not in line:
+                current_cat = {
+                    "name": re.sub(r"\s*\(.*\)", "", line[3:]).strip(),
+                    "subcategories": [],
+                }
+                categories.append(current_cat)
+            elif line.startswith("- [[") and current_cat is not None and not line.startswith("  "):
+                m = re.search(r"\[\[([^\]]+)\]\]", line)
+                desc_m = re.search(r"\]\] — (.+)$", line)
+                if m:
+                    current_cat["slug"] = m.group(1)
+                    current_cat["description"] = desc_m.group(1) if desc_m else ""
+            elif line.startswith("  - [[") and current_cat is not None:
+                m = re.search(r"\[\[([^\]]+)\]\]", line)
+                desc_m = re.search(r"\]\] — (.+?)(?:\s*\(|$)", line)
+                if m:
+                    current_cat["subcategories"].append({
+                        "slug": m.group(1),
+                        "name": m.group(1),
+                        "description": desc_m.group(1).strip() if desc_m else "",
+                    })
+
+        # Parse concept pages
+        concepts = []
+        in_concepts = False
+        for line in post.content.splitlines():
+            if "Concept pages" in line:
+                in_concepts = True
+                continue
+            if in_concepts and line.startswith("## "):
+                in_concepts = False
+            if in_concepts and line.startswith("- [["):
+                m = re.search(r"\[\[([^\]]+)\]\]", line)
+                used_m = re.search(r"used by: (.+)$", line)
+                if m:
+                    concepts.append({
+                        "slug": m.group(1),
+                        "name": m.group(1),
+                        "used_by": [u.strip() for u in used_m.group(1).split(",")] if used_m else [],
+                    })
+
+        return {
+            "status": "ok",
+            "meta": dict(post.metadata),
+            "categories": categories,
+            "concepts": concepts,
+            "total_pages": post.metadata.get("total_pages", 0),
+            "total_sources": post.metadata.get("total_sources", 0),
+            "total_concepts": post.metadata.get("total_concepts", 0),
+            "updated": post.metadata.get("updated", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tools/wiki/page")
+async def wiki_page(
+    name: str,
+    user_id: str = DEFAULT_USER_ID,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+):
+    """
+    Return a specific wiki page parsed into structured JSON.
+    name = slug e.g. 'agents', 'agents--evaluation', 'mips-retrieval'
+    """
+    try:
+        page_p = _wiki_page_path(user_id, workspace_id, name)
+        if not page_p.exists():
+            raise HTTPException(status_code=404, detail=f"Wiki page '{name}' not found.")
+        raw = page_p.read_text(encoding="utf-8")
+        parsed = _parse_wiki_page(raw)
+        parsed["slug"] = name
+        return {"status": "ok", "page": parsed}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WikiUpdateIndexRequest(BaseModel):
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/wiki/update_index")
+async def wiki_update_index(req: WikiUpdateIndexRequest):
+    """Manually regenerate index.md."""
+    try:
+        await _update_index(req.user_id, req.workspace_id)
+        index_p = _index_path(req.user_id, req.workspace_id)
+        return {
+            "status": "ok",
+            "message": "index.md regenerated",
+            "path": str(index_p),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WikiAppendLogRequest(BaseModel):
+    entry: str
+    user_id: str = DEFAULT_USER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+
+
+@app.post("/tools/wiki/append_log")
+async def wiki_append_log(req: WikiAppendLogRequest):
+    """Manually append an entry to log.md."""
+    try:
+        _append_log(req.user_id, req.workspace_id, req.entry)
+        return {"status": "ok", "message": "Appended to log.md"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
